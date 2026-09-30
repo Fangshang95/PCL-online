@@ -21,6 +21,16 @@ partial class Lifecycle
     /// <param name="ex">异常对象</param>
     public static void OnException(object ex)
     {
+        // v50.9.12 引入的忽略规则原本只挂在 DispatcherUnhandledException 上；实测这个竞态
+        // 多发生在退出阶段（窗口销毁时 MoveSize 的 WinEvent 回调仍在触发），此时 WPF 的
+        // Dispatcher 异常处理器已不再回调，异常会经 AppDomain.UnhandledException 直达这里，
+        // 弹出"致命错误"。因此把过滤上移到公共入口，两条路径都覆盖。
+        if (ex is System.ComponentModel.Win32Exception { NativeErrorCode: 1400 } wex
+            && wex.StackTrace?.Contains("MoveSizeWinEventHandler") == true)
+        {
+            Context.Warn("已忽略 WPF 拖动/缩放窗口句柄竞态异常（框架内部，无实际影响）", wex);
+            return;
+        }
         Context.Fatal("未捕获的异常", ex as Exception);
     }
 
