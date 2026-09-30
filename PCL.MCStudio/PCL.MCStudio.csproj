@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>preview</LangVersion>
+    <RootNamespace>PCL.MCStudio</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="KcpSharp" Version="0.8.8" />
+    <PackageReference Include="Open.NAT" Version="2.1.0" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
+  </ItemGroup>
+
+  <!-- v50.9.6 构建期内嵌真实平台配置（源码树零凭证）：打包机在 StudioSecretsDir 放
+       api.json/host.json 即内嵌进 exe——全新电脑/只换 exe 也能联机；文件不存在时
+       内嵌缺失，运行时回落磁盘文件 → 内置占位默认（开发机行为不变）。 -->
+  <PropertyGroup>
+    <StudioSecretsDir Condition="'$(StudioSecretsDir)' == ''">D:\PClonline\secrets</StudioSecretsDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="$(StudioSecretsDir)\api.json" Link="secrets\api.json"
+                      Condition="Exists('$(StudioSecretsDir)\api.json')" />
+    <EmbeddedResource Include="$(StudioSecretsDir)\host.json" Link="secrets\host.json"
+                      Condition="Exists('$(StudioSecretsDir)\host.json')" />
+  </ItemGroup>
+
+</Project>

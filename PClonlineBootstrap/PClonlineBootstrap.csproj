@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>PClonline</AssemblyName>
+    <RootNamespace>PClonlineBootstrap</RootNamespace>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(Platform)' == 'x64'">win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- 不含 WPF/WinForms：本程序只负责自展开、更新与拉起真正的应用，体积保持最小 -->
+    <UseWPF>false</UseWPF>
+    <UseWindowsForms>false</UseWindowsForms>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- 引导器只用 压缩/IO/进程 三类 API，裁剪可把自带运行时从 ~70MB 降到十几 MB，
+         直接决定"首次分发 exe"的体积（未裁剪时整包 122MB，明显大于现有 92MB） -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Version>50.10.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- app.zip 由打包脚本（build_update.py）在发布前生成并放至此目录 -->
+    <EmbeddedResource Include="app.zip" Condition="Exists('app.zip')" />
+  </ItemGroup>
+
+</Project>

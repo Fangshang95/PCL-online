@@ -1,0 +1,226 @@
+<local:MyPageRight x:Class="PCL.PageToolsStudio"
+                   xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:local="clr-namespace:PCL"
+                   xmlns:sys="clr-namespace:System;assembly=mscorlib"
+                   PanScroll="{Binding ElementName=PanBack}">
+    <local:MyScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" x:Name="PanBack">
+        <StackPanel x:Name="PanMain" Margin="25,10">
+
+            <local:MyCard Margin="0,15" Title="{DynamicResource Tools.Studio.Account.Title}">
+                <StackPanel Orientation="Vertical" Margin="25,40,25,20">
+                    <TextBlock Text="{DynamicResource Tools.Studio.Account.Description}" TextWrapping="Wrap"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" />
+
+                    <StackPanel x:Name="PanAccountUser" Visibility="Collapsed" Orientation="Vertical">
+                        <TextBlock x:Name="TxtAccountName" Margin="0,14,0,0" TextWrapping="Wrap"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <TextBlock x:Name="TxtAccountEmail" Margin="0,4,0,0" TextWrapping="Wrap" FontSize="12"
+                                   Style="{StaticResource BasedOnTextBlock}" Opacity="0.7" />
+                        <local:MyButton x:Name="BtnLogout" Margin="0,14,0,0" MinWidth="130" HorizontalAlignment="Left"
+                                        Text="{DynamicResource Tools.Studio.Account.Logout}"
+                                        Click="BtnLogout_Click" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="PanAccountLogin" Orientation="Vertical">
+                        <local:MyTextBox x:Name="TxtLoginEmail" Margin="0,14,0,0"
+                                         HintText="{DynamicResource Tools.Studio.Account.EmailHint}" />
+                        <PasswordBox x:Name="TxtLoginPassword" Margin="0,8,0,0" />
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <local:MyButton x:Name="BtnLogin" Grid.Column="0" MinWidth="130"
+                                            Text="{DynamicResource Tools.Studio.Account.Login}"
+                                            Click="BtnLogin_Click" />
+                            <local:MyTextButton x:Name="BtnShowRegister" Grid.Column="2"
+                                                Text="{DynamicResource Tools.Studio.Account.GoRegister}"
+                                                Click="BtnShowRegister_Click" />
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="PanAccountRegister" Visibility="Collapsed" Orientation="Vertical">
+                        <local:MyTextBox x:Name="TxtRegEmail" Margin="0,14,0,0"
+                                         HintText="{DynamicResource Tools.Studio.Account.EmailHint}" />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <local:MyTextBox x:Name="TxtRegCode" Grid.Column="0" MaxLength="6"
+                                             HintText="{DynamicResource Tools.Studio.Account.CodeHint}" />
+                            <local:MyButton x:Name="BtnSendCode" Grid.Column="1" MinWidth="130" Margin="15,0,0,0"
+                                            Text="{DynamicResource Tools.Studio.Account.SendCode}"
+                                            Click="BtnSendCode_Click" />
+                        </Grid>
+                        <local:MyTextBox x:Name="TxtRegNickname" Margin="0,8,0,0" MaxLength="24"
+                                         HintText="{DynamicResource Tools.Studio.Account.NicknameHint}" />
+                        <PasswordBox x:Name="TxtRegPassword" Margin="0,8,0,0" />
+                        <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" FontSize="12" Opacity="0.7"
+                                   Text="{DynamicResource Tools.Studio.Account.PasswordTip}"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <local:MyButton x:Name="BtnRegister" Grid.Column="0" MinWidth="130"
+                                            Text="{DynamicResource Tools.Studio.Account.Register}"
+                                            Click="BtnRegister_Click" />
+                            <local:MyTextButton x:Name="BtnShowLogin" Grid.Column="2"
+                                                Text="{DynamicResource Tools.Studio.Account.GoLogin}"
+                                                Click="BtnShowLogin_Click" />
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+            </local:MyCard>
+
+            <local:MyCard Margin="0,0,0,15" Title="{DynamicResource Tools.Studio.Friends.Title}">
+                <StackPanel Orientation="Vertical" Margin="25,40,25,20">
+                    <TextBlock Text="{DynamicResource Tools.Studio.Friends.Description}" TextWrapping="Wrap"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" />
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <local:MyTextBox x:Name="TxtFriendEmail" Grid.Column="0"
+                                         HintText="{DynamicResource Tools.Studio.Friends.EmailHint}" />
+                        <local:MyButton x:Name="BtnFriendAdd" Grid.Column="1" MinWidth="130" Margin="15,0,0,0"
+                                        Text="{DynamicResource Tools.Studio.Friends.Add}"
+                                        Click="BtnFriendAdd_Click" />
+                    </Grid>
+                    <TextBlock x:Name="TxtFriendsEmpty" TextWrapping="Wrap" Margin="0,12,0,0"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.7" />
+                    <StackPanel x:Name="PanFriends" Margin="0,8,0,0" />
+                </StackPanel>
+            </local:MyCard>
+
+            <local:MyCard Margin="0,0,0,15" Title="{DynamicResource Tools.Studio.Join.Title}">
+                <StackPanel Orientation="Vertical" Margin="25,40,25,20">
+                    <TextBlock Text="{DynamicResource Tools.Studio.Join.Description}" TextWrapping="Wrap"
+                               Style="{StaticResource BasedOnTextBlock}" />
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <local:MyTextBox x:Name="TxtCode" Grid.Column="0"
+                                         HintText="{DynamicResource Tools.Studio.Join.CodeHint}"
+                                         MaxLength="8" />
+                        <local:MyButton x:Name="BtnJoin" Grid.Column="1" MinWidth="130" Margin="15,0,0,0"
+                                        Text="{DynamicResource Tools.Studio.Join.Button}"
+                                        Click="BtnJoin_Click" />
+                    </Grid>
+                    <DockPanel Margin="0,8,0,0" LastChildFill="True">
+                        <local:MyTextButton x:Name="BtnJoinLocalPack" DockPanel.Dock="Right"
+                                            Text="导入本地整合包" VerticalAlignment="Center" Margin="10,0,0,0"
+                                            Click="BtnJoinLocalPack_Click"
+                                            ToolTip="手里已有该服务器的客户端整合包 zip（如房主直接发给你）时，选择它免下载加入" />
+                        <TextBlock x:Name="TxtJoinLocalPack" FontSize="12" Opacity="0.7" TextWrapping="Wrap"
+                                   VerticalAlignment="Center" Style="{StaticResource BasedOnTextBlock}"
+                                   Text="未选择本地整合包（将按房间要求自动下载）" />
+                    </DockPanel>
+                    <TextBlock x:Name="TxtResult" TextWrapping="Wrap" Margin="0,12,0,0"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" Visibility="Collapsed" />
+                    <TextBlock x:Name="TxtJoinProgress" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.7" Visibility="Collapsed" />
+                </StackPanel>
+            </local:MyCard>
+
+            <local:MyCard Margin="0,0,0,15" Title="{DynamicResource Tools.Studio.Host.Title}">
+                <StackPanel Orientation="Vertical" Margin="25,40,25,20">
+                    <TextBlock Text="{DynamicResource Tools.Studio.Host.Description}" TextWrapping="Wrap"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" />
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="服务器：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <local:MyComboBox x:Name="ComboHostServer" Grid.Column="1" Height="26"
+                                          ToolTip="已保存的服务器：选中即回填版本与加载器，关服后可随时重开；选「新服务器」可开新档" />
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="服务端包：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <DockPanel Grid.Column="1" LastChildFill="True">
+                            <local:MyTextButton x:Name="BtnServerPackPick" DockPanel.Dock="Right"
+                                                Text="选择 zip…" VerticalAlignment="Center" Margin="10,0,0,0"
+                                                Click="BtnServerPackPick_Click" />
+                            <TextBlock x:Name="TxtServerPackStatus" FontSize="12" Opacity="0.75"
+                                       TextWrapping="Wrap" MaxHeight="34" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Style="{StaticResource BasedOnTextBlock}"
+                                       ToolTip="作者发布的服务端整合包（内含已装好的 Forge/模组/配置）。选择后版本与加载器自动跟随，开房时自动展开为服务器" />
+                        </DockPanel>
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="客户端包：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <local:MyComboBox x:Name="ComboHostClientPack" Grid.Column="1" Height="26"
+                                          ToolTip="朋友加入时将自动下载并安装这个客户端整合包后进服（云端开服思路）。与服务端包配对=使用导入时配对的客户端包；本地 zip 仅本机可用，朋友需可下载链接；不提供则朋友无法加入" />
+                    </Grid>
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{DynamicResource Tools.Studio.Host.Mc}"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <local:MyComboBox x:Name="ComboHostMc" Grid.Column="1" Height="26" SelectedIndex="0">
+                            <sys:String>自动</sys:String>
+                            <sys:String>1.21.1</sys:String>
+                            <sys:String>1.20.1</sys:String>
+                            <sys:String>1.19.2</sys:String>
+                        </local:MyComboBox>
+                        <TextBlock Grid.Column="2" Text="{DynamicResource Tools.Studio.Host.Loader}"
+                                   VerticalAlignment="Center" Margin="15,0,10,0"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <local:MyComboBox x:Name="ComboHostLoader" Grid.Column="3" Height="26" SelectedIndex="0">
+                            <sys:String>自动</sys:String>
+                            <sys:String>Fabric</sys:String>
+                            <sys:String>Forge</sys:String>
+                            <sys:String>NeoForge</sys:String>
+                            <sys:String>Vanilla</sys:String>
+                        </local:MyComboBox>
+                    </Grid>
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <local:MyButton x:Name="BtnHostStart" Grid.Column="0" MinWidth="130"
+                                        Text="{DynamicResource Tools.Studio.Host.Start}"
+                                        Click="BtnHostStart_Click" />
+                        <local:MyButton x:Name="BtnHostStop" Grid.Column="1" MinWidth="130" Margin="15,0,0,0"
+                                        Text="{DynamicResource Tools.Studio.Host.Stop}"
+                                        Click="BtnHostStop_Click" IsEnabled="False" />
+                    </Grid>
+                    <TextBlock x:Name="TxtHostStatus" TextWrapping="Wrap" Margin="0,12,0,0"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" Visibility="Collapsed" />
+                    <TextBlock x:Name="TxtHostProgress" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12"
+                               Style="{StaticResource BasedOnTextBlock}" Opacity="0.7" Visibility="Collapsed" />
+                </StackPanel>
+            </local:MyCard>
+
+        </StackPanel>
+    </local:MyScrollViewer>
+</local:MyPageRight>

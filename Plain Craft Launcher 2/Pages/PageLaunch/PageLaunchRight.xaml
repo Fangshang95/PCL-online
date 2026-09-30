@@ -1,0 +1,222 @@
+<local:MyPageRight x:Class="PCL.PageLaunchRight"
+                   xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:local="clr-namespace:PCL"
+                   xmlns:sys="clr-namespace:System;assembly=mscorlib">
+    <local:MyScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" x:Name="PanBack">
+        <StackPanel Name="PanMain" Margin="25,25,25,10">
+
+            <!-- v49 场景选择：三种玩法一句话说清，点谁显示谁 -->
+            <Grid Margin="0,0,0,15">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <local:MyButton x:Name="BtnModeJoin" Grid.Column="0" Height="44" Text="加入好友的房间"
+                                ToolTip="好友给了你房间码？在这加入他的世界或服务器" Click="BtnModeJoin_Click" />
+                <local:MyButton x:Name="BtnModeLan" Grid.Column="2" Height="44" Text="和朋友玩我的存档"
+                                ToolTip="无需任何服务器整合包：用你自己的存档联机，发房间码给好友即可" Click="BtnModeLan_Click" />
+                <local:MyButton x:Name="BtnModeHost" Grid.Column="4" Height="44" Text="开设专用服务器"
+                                ToolTip="进阶：用服务端整合包创建长期服务器，好友随时加入" Click="BtnModeHost_Click" />
+            </Grid>
+
+            <!-- 场景一：加入好友的房间 -->
+            <Grid x:Name="PanModeJoin">
+                <local:MyCard Margin="0,0,0,15" Title="加入好友的房间">
+                    <StackPanel Orientation="Vertical" Margin="25,40,25,20">
+                        <TextBlock Text="拿到好友发来的房间码后，输入并一键加入——游戏文件会自动准备，无需手动操作。"
+                                   TextWrapping="Wrap" Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" />
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <local:MyTextBox x:Name="TxtCode" Grid.Column="0"
+                                             HintText="输入 6 位房间码，如 MC7K2A"
+                                             MaxLength="8" />
+                            <local:MyButton x:Name="BtnJoin" Grid.Column="1" MinWidth="130" Margin="15,0,0,0"
+                                            Text="一键加入" Click="BtnJoin_Click" />
+                        </Grid>
+                        <DockPanel Margin="0,8,0,0" LastChildFill="True">
+                            <local:MyTextButton x:Name="BtnJoinLocalPack" DockPanel.Dock="Right"
+                                                Text="导入本地整合包" VerticalAlignment="Center" Margin="10,0,0,0"
+                                                Click="BtnJoinLocalPack_Click"
+                                                ToolTip="手里已有该服务器的客户端整合包 zip（如房主直接发给你）时，选择它免下载加入" />
+                            <TextBlock x:Name="TxtJoinLocalPack" FontSize="12" Opacity="0.7" TextWrapping="Wrap"
+                                       VerticalAlignment="Center" Style="{StaticResource BasedOnTextBlock}"
+                                       Text="未选择本地整合包（将按房间要求自动下载）" />
+                        </DockPanel>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="170" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="连接方式" VerticalAlignment="Center" Margin="0,0,10,0"
+                                       Style="{StaticResource BasedOnTextBlock}" />
+                            <local:MyComboBox x:Name="ComboConnectMode" Grid.Column="1" Height="26" SelectedIndex="0"
+                                              ToolTip="智能：优先 P2P 直连（IPv6 / UDP 打洞），失败自动回退中转；仅直连 / 仅中转 强制指定线路">
+                                <sys:String>智能（直连优先）</sys:String>
+                                <sys:String>仅 P2P 直连</sys:String>
+                                <sys:String>仅中转（frp）</sys:String>
+                            </local:MyComboBox>
+                        </Grid>
+                        <TextBlock x:Name="TxtResult" TextWrapping="Wrap" Margin="0,12,0,0"
+                                   Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" Visibility="Collapsed" />
+                        <TextBlock x:Name="TxtJoinProgress" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12"
+                                   Style="{StaticResource BasedOnTextBlock}" Opacity="0.7" Visibility="Collapsed" />
+                    </StackPanel>
+                </local:MyCard>
+            </Grid>
+
+            <!-- 场景二：和朋友玩我的存档（v48 虚拟局域网） -->
+            <Grid x:Name="PanModeLan" Visibility="Collapsed">
+                <local:MyCard Margin="0,0,0,15" Title="和朋友玩我的存档（无需服务器）">
+                    <StackPanel Orientation="Vertical" Margin="25,40,25,20">
+                        <StackPanel Orientation="Vertical" Margin="0,0,0,4">
+                            <TextBlock Text="①  选择游戏实例，点下方「启动游戏并开始联机」"
+                                       Style="{StaticResource BasedOnTextBlock}" Opacity="0.75" />
+                            <TextBlock Text="②  在游戏里打开要联机的存档 → 按 ESC → 点「对局域网开放」"
+                                       Margin="0,3,0,0"
+                                       Style="{StaticResource BasedOnTextBlock}" Opacity="0.75" />
+                            <TextBlock Text="③  回到这里复制房间码发给好友，好友一键加入"
+                                       Margin="0,3,0,0"
+                                       Style="{StaticResource BasedOnTextBlock}" Opacity="0.75" />
+                        </StackPanel>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="游戏实例：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                       Style="{StaticResource BasedOnTextBlock}" />
+                            <local:MyComboBox x:Name="ComboLanInstance" Grid.Column="1" Height="26"
+                                              ToolTip="用于联机的本机实例：请选择与好友相同的版本与模组（好友端可导入同一个客户端整合包）" />
+                            <local:MyTextButton x:Name="BtnLanCleanup" Grid.Column="2" Text="清理历史实例"
+                                                Margin="10,0,0,0" VerticalAlignment="Center"
+                                                ToolTip="旧版本按房间码创建的装配实例（mcstudio-mcXXXX）已无法复用，一键清理释放空间；当前使用的 mcstudio-pack-* 实例不受影响"
+                                                Click="BtnLanCleanup_Click" />
+                        </Grid>
+                        <local:MyButton x:Name="BtnLanHost" Height="40" Margin="0,12,0,0"
+                                        Text="启动游戏并开始联机" ColorType="Highlight" Click="BtnLanHost_Click" />
+                        <Grid Margin="0,10,0,0" Visibility="Collapsed" x:Name="PanLanActions">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <local:MyTextButton x:Name="BtnLanCopy" Grid.Column="0" Text="复制房间码"
+                                                Click="BtnLanCopy_Click" VerticalAlignment="Center" />
+                            <local:MyTextButton x:Name="BtnLanStop" Grid.Column="1" Text="结束联机"
+                                                Click="BtnLanStop_Click" Margin="15,0,0,0" VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock x:Name="TxtLanStatus" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="12"
+                                   Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" Visibility="Collapsed" />
+                    </StackPanel>
+                </local:MyCard>
+            </Grid>
+
+            <!-- 场景三：开设专用服务器（进阶） -->
+            <Grid x:Name="PanModeHost" Visibility="Collapsed">
+                <local:MyCard Margin="0,0,0,15" Title="开设专用服务器（进阶）">
+                    <StackPanel Orientation="Vertical" Margin="25,40,25,20">
+                        <TextBlock Text="用服务端整合包创建长期服务器：关掉游戏服务器也继续跑，好友随时加入。想直接玩自己的存档，请用上方的「和朋友玩我的存档」。"
+                                   TextWrapping="Wrap" Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" />
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="服务器：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                       Style="{StaticResource BasedOnTextBlock}" />
+                            <local:MyComboBox x:Name="ComboHostServer" Grid.Column="1" Height="26"
+                                              ToolTip="已保存的服务器：选中即回填版本与加载器，关服后可随时重开；选「新服务器」可开新档" />
+                        </Grid>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="服务端包：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                       Style="{StaticResource BasedOnTextBlock}" />
+                            <DockPanel Grid.Column="1" LastChildFill="True">
+                                <local:MyTextButton x:Name="BtnServerPackPick" DockPanel.Dock="Right"
+                                                    Text="选择 zip…" VerticalAlignment="Center" Margin="10,0,0,0"
+                                                    Click="BtnServerPackPick_Click" />
+                                <TextBlock x:Name="TxtServerPackStatus" FontSize="12" Opacity="0.75"
+                                           TextWrapping="Wrap" MaxHeight="34" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"
+                                           Style="{StaticResource BasedOnTextBlock}"
+                                           ToolTip="作者发布的服务端整合包（内含已装好的 Forge/模组/配置）。选择后版本与加载器自动跟随，开房时自动展开为服务器" />
+                            </DockPanel>
+                        </Grid>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="客户端包：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                       Style="{StaticResource BasedOnTextBlock}" />
+                            <local:MyComboBox x:Name="ComboHostClientPack" Grid.Column="1" Height="26"
+                                              ToolTip="朋友加入时将自动下载并安装这个客户端整合包后进服（云端开服思路）。与服务端包配对=使用导入时配对的客户端包；本地 zip 仅本机可用，朋友需可下载链接；不提供则朋友无法加入" />
+                        </Grid>
+                        <TextBlock x:Name="TxtClientPackStatus" FontSize="12" TextWrapping="Wrap"
+                                   Margin="0,6,0,0" Style="{StaticResource BasedOnTextBlock}" Opacity="0.75"
+                                   Visibility="Collapsed" />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="MC 版本：" VerticalAlignment="Center" Margin="0,0,10,0"
+                                       Style="{StaticResource BasedOnTextBlock}" />
+                            <local:MyComboBox x:Name="ComboHostMc" Grid.Column="1" Height="26" SelectedIndex="0">
+                                <sys:String>自动</sys:String>
+                                <sys:String>1.21.1</sys:String>
+                                <sys:String>1.20.1</sys:String>
+                                <sys:String>1.19.2</sys:String>
+                            </local:MyComboBox>
+                            <TextBlock Grid.Column="2" Text="加载器：" VerticalAlignment="Center" Margin="15,0,10,0"
+                                       Style="{StaticResource BasedOnTextBlock}" />
+                            <local:MyComboBox x:Name="ComboHostLoader" Grid.Column="3" Height="26" SelectedIndex="0">
+                                <sys:String>自动</sys:String>
+                                <sys:String>Fabric</sys:String>
+                                <sys:String>Forge</sys:String>
+                                <sys:String>NeoForge</sys:String>
+                                <sys:String>Vanilla</sys:String>
+                            </local:MyComboBox>
+                        </Grid>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <local:MyButton x:Name="BtnHostStart" Grid.Column="0" MinWidth="130"
+                                            Text="创建服务器房间" Click="BtnHostStart_Click" />
+                            <local:MyButton x:Name="BtnHostJoin" Grid.Column="1" MinWidth="130" Margin="15,0,0,0"
+                                            Text="自己进入游戏" Click="BtnHostJoin_Click" IsEnabled="False" />
+                            <local:MyButton x:Name="BtnHostStop" Grid.Column="2" MinWidth="130" Margin="15,0,0,0"
+                                            Text="关闭服务器" Click="BtnHostStop_Click" IsEnabled="False" />
+                        </Grid>
+                        <TextBlock x:Name="TxtHostStatus" TextWrapping="Wrap" Margin="0,12,0,0"
+                                   Style="{StaticResource BasedOnTextBlock}" Opacity="0.8" Visibility="Collapsed" />
+                        <TextBlock x:Name="TxtHostProgress" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12"
+                                   Style="{StaticResource BasedOnTextBlock}" Opacity="0.7" Visibility="Collapsed" />
+                    </StackPanel>
+                </local:MyCard>
+            </Grid>
+
+            <!-- 启动日志缓冲：ModLaunch.McLaunchLog 仍会写入，界面默认不展示（完整日志见日志窗口） -->
+            <TextBlock x:Name="LabLog" Visibility="Collapsed" />
+        </StackPanel>
+    </local:MyScrollViewer>
+</local:MyPageRight>
