@@ -199,9 +199,12 @@ def main():
     today = datetime.date.today().strftime("%Y%m%d")
     print("=== 打包 %s ===" % version, flush=True)
 
-    # 1. 发布应用层（无框架：运行时不随包走，交给 runtime\ 或玩家系统）
-    print("--- 发布应用层（无框架）---", flush=True)
-    run('"%s" publish "%s" -c Release -p:Platform=x64 -p:SelfContained=false '
+    # 1. 发布应用层（自包含：运行时打进包里，玩家双击即用）。
+    #    v50.11.2~11.4 的"无框架 + 外挂运行时"在玩家机器连续翻车（net.zip 下不动、
+    #    双击 app\ 内同名 exe 弹英文缺 .NET、提权重启丢 DOTNET_ROOT），v50.11.5 回归
+    #    v50.10.3 的自包含形态：永远不需要联网装运行时。引导器更新机制保留。
+    print("--- 发布应用层（自包含）---", flush=True)
+    run('"%s" publish "%s" -c Release -p:Platform=x64 -p:SelfContained=true '
         '-p:PublishSingleFile=false -o "%s" --nologo -v q' % (DOTNET, PROJ, APP_DIR),
         os.path.join(BUILD, "publish_app.log"))
 
@@ -214,41 +217,47 @@ def main():
     entries = scan_files(APP_DIR)
     total = sum(e["size"] for e in entries)
     print("应用层：%d 个文件，共 %.1f MB" % (len(entries), total / 1048576), flush=True)
-    # 2. 组装运行时包（net.zip）
-    print("--- 组装运行时 ---", flush=True)
+
+    # 2. 运行时包仅在"无框架应用层"时组装（自包含版 runtimeconfig 用 includedFrameworks，
+    #    读不到 frameworks 声明 → 自然跳过）。v50.11.5 起常规产物就是自包含，这段只作保留。
+    print("--- 检查运行时声明 ---", flush=True)
     fw_list = read_frameworks(APP_DIR)
-    if not fw_list:
-        sys.exit("应用层 runtimeconfig 里没声明 framework，无法组装运行时包")
-    print("  声明的框架：%s" % ", ".join("%s %s" % (n, v) for n, v in fw_list), flush=True)
-    rt_roots = pick_runtime_files(fw_list)
-    rt_rels = sorted({r for rels in rt_roots.values() for r in rels})
+    rt_roots = None
     rt_entries = []
-    for root, rels in rt_roots.items():
-        for rel in rels:
-            full = os.path.join(root, rel.replace("/", os.sep))
-            rt_entries.append({"path": rel, "size": os.path.getsize(full),
-                               "sha256": sha256_of(full)})
-    rt_entries.sort(key=lambda e: e["path"])
-    print("运行时：%d 个文件，共 %.1f MB" % (len(rt_entries),
-                                       sum(e["size"] for e in rt_entries) / 1048576), flush=True)
+    runtime_block = None
+    net_zip = None
+    net_size = 0
+    if fw_list:
+        print("  声明的框架：%s（无框架应用层，需组装运行时包）" %
+              ", ".join("%s %s" % (n, v) for n, v in fw_list), flush=True)
+        rt_roots = pick_runtime_files(fw_list)
+        for rtroot, rels in rt_roots.items():
+            for rel in rels:
+                full = os.path.join(rtroot, rel.replace("/", os.sep))
+                rt_entries.append({"path": rel, "size": os.path.getsize(full),
+                                   "sha256": sha256_of(full)})
+        rt_entries.sort(key=lambda e: e["path"])
+    else:
+        print("  自包含应用层（includedFrameworks）：运行时已打进包，不产 net.zip", flush=True)
 
     out_dir = os.path.join(DIST, version)
     upd_dir = os.path.join(out_dir, "update")
     os.makedirs(upd_dir, exist_ok=True)
 
-    # 3. 两个包
+    # 3. 包
     all_rels = [e["path"] for e in entries]
-    # 3a. 内嵌进 exe 的那份（带清单，自展开后 app\ 里就有版本标记）
+    # 3a. 内嵌进 exe 的那份（带版本标记，自展开后 app\ 里就有版本标记）
     embed_zip = os.path.join(BUILD, "app.zip")
     zip_files(embed_zip, {APP_DIR: all_rels + ["version.json"]})
     # 3b. 对外发布的全量应用层
     full_zip = os.path.join(upd_dir, "app.zip")
     full_size = zip_files(full_zip, {APP_DIR: all_rels})
-    # 3c. 运行时包
-    net_zip = os.path.join(upd_dir, "net.zip")
-    net_size = zip_files(net_zip, rt_roots)
-    print("app.zip：%.1f MB（无框架应用层）" % (full_size / 1048576), flush=True)
-    print("net.zip ：%.1f MB（.NET 运行时）" % (net_size / 1048576), flush=True)
+    print("app.zip：%.1f MB（自包含应用层）" % (full_size / 1048576), flush=True)
+    # 3c. 运行时包（仅无框架形态才产）
+    if rt_roots is not None:
+        net_zip = os.path.join(upd_dir, "net.zip")
+        net_size = zip_files(net_zip, rt_roots)
+        print("net.zip ：%.1f MB（.NET 运行时）" % (net_size / 1048576), flush=True)
 
     # 包地址一律写相对文件名：客户端按"清单取自哪个地址"拼绝对 URL，
     # 清单字节原样返回才不会破坏 ECDSA 签名
@@ -257,13 +266,14 @@ def main():
         "url": "app.zip",
         "size": full_size, "sha256": sha256_of(full_zip),
     }]
-    runtime_block = {
-        "url": "net.zip",
-        "size": net_size,
-        "sha256": sha256_of(net_zip),
-        "count": len(rt_entries),
-        "files": rt_entries[:200],   # 完整性抽样校验用，全量清单反而没必要下
-    }
+    if rt_roots is not None:
+        runtime_block = {
+            "url": "net.zip",
+            "size": net_size,
+            "sha256": sha256_of(net_zip),
+            "count": len(rt_entries),
+            "files": rt_entries[:200],   # 完整性抽样校验用，全量清单反而没必要下
+        }
 
     # 4. version.json + 签名（只写到发布目录；APP_DIR\version.json 是 1b 写的简版标记，
     #    千万别用完整清单盖回去——下次构建又会把它当残留嵌进 exe）
@@ -271,9 +281,10 @@ def main():
         "version": version,
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         "files": entries,
-        "runtime": runtime_block,
         "packages": packages,
     }
+    if runtime_block is not None:
+        manifest["runtime"] = runtime_block   # 仅无框架形态才有（自包含形态不产 net.zip）
     mpath = os.path.join(upd_dir, "version.json")
     with open(mpath, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=1)
@@ -312,19 +323,19 @@ def main():
     print("sha256：%s" % sha256_of(out), flush=True)
     print("发布资产：%s" % upd_dir, flush=True)
 
-    # 5b. 离线包：exe + net.zip（给连不上 GitHub / 下不动大包的玩家，解压即装、全程不联网）
+    # 5b. 离线包：自包含形态下单 exe 本身就是离线包，这里只做 exe + 说明 的合并包
     off_zip = os.path.join(upd_dir, "PCLonline-%s-offline.zip" % version)
     readme = ("\ufeffPClonine 离线安装包 %s\r\n\r\n"
               "1. 把压缩包里的全部文件解压到任意文件夹（放哪都行，别放在带 # 的路径里）\r\n"
-              "2. 双击 PClonline.exe，启动器会自动释放程序并从旁边的 net.zip 安装运行时\r\n"
-              "   —— 全程不需要联网\r\n"
-              "3. 之后想升级：直接用新 exe 覆盖 PClonline.exe 即可，程序本体和用户数据都会保留\r\n"
+              "2. 双击 PClonine.exe 即可——运行时已内置在程序里，全程不需要联网\r\n"
+              "3. 之后想升级：直接用新 exe 覆盖 PClonine.exe 即可，用户数据都会保留\r\n"
               "   （在能连 GitHub 的网络下，启动器也会自动检查并安装更新）\r\n") % dict(version=version)
     with zipfile.ZipFile(off_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        z.write(out, "PClonline.exe")
-        # net.zip 本身就是压缩包，再 DEFLATE 一遍几乎不省体积（实测省 0.6%）却让解压慢好几倍，
-        # 直接原样存进去——玩家用任何解压工具都能秒开
-        z.write(net_zip, "net.zip", zipfile.ZIP_STORED)
+        z.write(out, "PClonine.exe")
+        if net_zip is not None:
+            # net.zip 本身就是压缩包，再 DEFLATE 一遍几乎不省体积（实测省 0.6%）却让解压慢好几倍，
+            # 原样存进去——玩家用任何解压工具都能秒开（仅无框架形态才有这个文件）
+            z.write(net_zip, "net.zip", zipfile.ZIP_STORED)
         z.writestr("使用说明.txt", readme)
     print("离线包：%s（%.1f MB）" % (off_zip, os.path.getsize(off_zip) / 1048576), flush=True)
 
@@ -334,9 +345,14 @@ def main():
         "",
         "  version.json      清单（ECDSA 签名）",
         "  version.json.sig  签名",
-        "  app.zip            %.1f MB（无框架应用层，每次更新全量覆盖）" % (full_size / 1048576),
-        "  net.zip            %.1f MB（.NET 运行时，装一次就再也不用下）" % (net_size / 1048576),
-        "  PCLonline-%s-offline.zip  离线安装包（exe + net.zip，给下不动 GitHub 的玩家）" % version,
+        "  app.zip            %.1f MB（%s应用层，每次更新全量覆盖）"
+        % (full_size / 1048576, "自包含" if rt_roots is None else "无框架"),
+    ]
+    if rt_roots is not None:
+        lines.append("  net.zip            %.1f MB（.NET 运行时，装一次就再也不用下）"
+                     % (net_size / 1048576))
+    lines += [
+        "  PCLonline-%s-offline.zip  离线安装包（给下不动 GitHub 的玩家）" % version,
         "",
         "清单里的包地址是相对文件名，客户端按清单来源自动拼成绝对地址：",
         "  GitHub  → " + GH_BASE + "/app.zip",
@@ -348,8 +364,8 @@ def main():
         "  · 这些资产必须都在同一个 latest Release 里（latest/download 前缀要求）",
         "  · version.json 与 version.json.sig 必须成对更新（签名针对文件原始字节，",
         "    Release 会原样返回，任何改动都会导致验签失败）",
-        "  · app.zip 无框架（不含运行时），运行时由 net.zip 装到 runtime\\ 目录，",
-        "    更新时只覆盖 app\\，runtime\\ 永远不动",
+        "  · 应用层%s，更新时整体覆盖 app\\"
+        % ("自包含（运行时已打进包）" if rt_roots is None else "无框架，运行时由 net.zip 装到 runtime"),
     ]
     with open(os.path.join(upd_dir, "upload-notes.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

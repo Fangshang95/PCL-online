@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using System.IO.Compression;
 using System.Reflection;
 using System.Text;
@@ -77,10 +78,11 @@ internal static class Program
                 else if (!string.IsNullOrEmpty(embeddedVer)
                          && !string.Equals(embeddedVer, localVer, StringComparison.OrdinalIgnoreCase))
                 {
-                    // 升级保护：换 exe 后旧 app\ 可能是自包含版（双击就能跑的最后一版），
-                    // 清掉它之后必须保证新无框架 app 有运行时可用，否则玩家连旧版都没了。
-                    // 救不回来就保留旧版继续跑，把补救方法说清楚
-                    if (RuntimeInstaller.NewAppCanRun(baseDir, appDir))
+                    // 旧应用层可能是自包含版（双击就能跑的最后一版），清掉它之后必须保证
+                    // 新应用层有运行时可用，否则玩家连旧版都没了。
+                    // 自包含版（运行时在包里）永远可升级；无框架版才需要找外部运行时来源
+                    var embeddedSelfContained = EmbeddedIsSelfContained();
+                    if (embeddedSelfContained || RuntimeInstaller.NewAppCanRun(baseDir, appDir))
                     {
                         Log("内置版本 " + embeddedVer + " 与应用层 " + (localVer ?? "（未知）") +
                             " 不同：清理旧应用层后重新释放…");
@@ -176,6 +178,27 @@ internal static class Program
         {
             Log("启动失败：" + ex);
             return 1;
+        }
+    }
+
+    /// <summary>内嵌 app.zip 的 runtimeconfig 是否用 includedFrameworks（自包含，运行时在包里）。</summary>
+    private static bool EmbeddedIsSelfContained()
+    {
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            using var stream = asm.GetManifestResourceStream(ResourceName);
+            if (stream is null) return false;
+            using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
+            var entry = zip.Entries.FirstOrDefault(e =>
+                e.FullName.EndsWith(".runtimeconfig.json", StringComparison.OrdinalIgnoreCase));
+            if (entry is null) return false;
+            using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+            return reader.ReadToEnd().Contains("includedFrameworks");
+        }
+        catch
+        {
+            return false;
         }
     }
 
