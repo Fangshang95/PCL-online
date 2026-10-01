@@ -53,21 +53,14 @@ internal static class RuntimeInstaller
             return runtimeDir;
         }
 
-        var baseDir = Directory.GetParent(runtimeDir)?.FullName;
-        var localZip = string.IsNullOrEmpty(baseDir) ? null : Path.Combine(baseDir, "net.zip");
+        var baseDir = Directory.GetParent(runtimeDir)?.FullName ?? "";
         var stamp = Path.Combine(runtimeDir, ".installed");
-        if (localZip is not null && File.Exists(localZip) && !ZipLooksLikeRuntime(localZip))
-        {
-            // 最常见的成因：从 GitHub 下大包没下完就解压了。别静默跳过，明说
-            log("旁边的 net.zip 打不开或不是运行时包（多半是下载/解压不完整），将尝试联网下载；"
-                + "建议重新解压离线压缩包");
-        }
 
         // 1b) 离线快速通道：清单拉不到时 IsComplete 没有校验基准，
         //     靠安装时写的 .installed 指纹（net.zip 大小+修改时间）判定"装过且包没变"，
         //     否则离线玩家每次启动都要重解压一遍 171MB
-        if (runtime is null && localZip is not null && File.Exists(localZip)
-            && File.Exists(stamp))
+        var localZip = string.IsNullOrEmpty(baseDir) ? null : FindLocalRuntimeZip(baseDir, appDir);
+        if (runtime is null && localZip is not null && File.Exists(stamp))
         {
             try
             {
@@ -80,9 +73,17 @@ internal static class RuntimeInstaller
             catch { /* 标记坏了就当没装过 */ }
         }
 
-        // 2) 离线包：启动器同级目录的 net.zip（发布时的离线压缩包就是 exe + net.zip）。
-        //    必须放在"读清单"之前——离线场景清单本来就拉不到，不能因为它就装不了运行时
-        if (localZip is not null && File.Exists(localZip) && ZipLooksLikeRuntime(localZip)
+        // 2) 已解压的运行时目录：有人会把 net.zip 解开用，直接认，不用再装一遍
+        var extracted = string.IsNullOrEmpty(baseDir) ? null : FindExtractedRuntime(baseDir);
+        if (extracted is not null)
+        {
+            log("使用解压好的运行时目录：" + extracted);
+            return extracted;
+        }
+
+        // 3) 本地 net.zip（离线包形态）。必须放在"读清单"之前——
+        //    离线场景清单本来就拉不到，不能因为它就装不了运行时
+        if (localZip is not null
             && (runtime is null || string.IsNullOrWhiteSpace(runtime.Sha256)
                 || string.Equals(UpdateService.Sha256Of(localZip), runtime.Sha256, StringComparison.OrdinalIgnoreCase)))
         {
@@ -98,6 +99,12 @@ internal static class RuntimeInstaller
             {
                 log("离线运行时包解压失败：" + ex.Message + "，改走下载");
             }
+        }
+        else if (localZip is not null)
+        {
+            // 找到了包但 sha256 与清单不符，或解压失败 —— 别静默跳过，明说
+            log("旁边的 net.zip 与清单不符或无法解压（多半是下载/解压不完整），将尝试联网下载；"
+                + "建议重新获取 net.zip");
         }
 
         // 3) 从清单给的 net.zip 装一份移动运行时
@@ -123,6 +130,92 @@ internal static class RuntimeInstaller
     {
         var fi = new FileInfo(zipPath);
         return fi.Length + ":" + fi.LastWriteTimeUtc.Ticks;
+    }
+
+    /// <summary>
+    /// 找玩家手上的 net.zip，位置宽容些：启动器同级 → 一级子文件夹（有人解压出了个子目录）
+    /// → app\ 里（放错位置的也救回来）。
+    /// </summary>
+    public static string? FindLocalRuntimeZip(string baseDir, string appDir)
+    {
+        try
+        {
+            var candidates = new List<string> { Path.Combine(baseDir, "net.zip") };
+            foreach (var d in Directory.EnumerateDirectories(baseDir))
+            {
+                var name = Path.GetFileName(d);
+                if (name == AppDirNameMarker) continue;
+                candidates.Add(Path.Combine(d, "net.zip"));
+            }
+            candidates.Add(Path.Combine(appDir, "net.zip"));
+            foreach (var c in candidates)
+            {
+                if (File.Exists(c) && ZipLooksLikeRuntime(c)) return c;
+            }
+        }
+        catch { /* 枚举失败就当没有 */ }
+        return null;
+    }
+
+    private const string AppDirNameMarker = "app";
+
+    /// <summary>
+    /// 找"已解压的运行时目录"：有人会把 net.zip 解开，得到 dotnet.exe + host\fxr + shared\...。
+    /// 这种目录直接当 DOTNET_ROOT 用，不用再装一遍。只看启动器同级的一层子目录。
+    /// </summary>
+    public static string? FindExtractedRuntime(string baseDir)
+    {
+        try
+        {
+            foreach (var d in Directory.EnumerateDirectories(baseDir))
+            {
+                var name = Path.GetFileName(d);
+                if (name is "app" or "runtime" or "PCL") continue;
+                if (File.Exists(Path.Combine(d, "dotnet.exe"))
+                    && Directory.Exists(Path.Combine(d, "host", "fxr"))
+                    && Directory.Exists(Path.Combine(d, "shared", "Microsoft.WindowsDesktop.App")))
+                {
+                    return d;
+                }
+            }
+        }
+        catch { /* 同上 */ }
+        return null;
+    }
+
+    /// <summary>系统里有没有 .NET 10 桌面运行时（粗查常见安装位置；升级可行性判断用）。</summary>
+    public static bool SystemHasNet10()
+    {
+        foreach (var root in new[]
+                 {
+                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet"),
+                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "dotnet"),
+                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dotnet"),
+                 })
+        {
+            try
+            {
+                var wd = Path.Combine(root, "shared", "Microsoft.WindowsDesktop.App");
+                if (!Directory.Exists(wd)) continue;
+                foreach (var v in Directory.EnumerateDirectories(wd))
+                {
+                    if (Path.GetFileName(v).StartsWith("10.", StringComparison.Ordinal)) return true;
+                }
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// "把应用层换成新版（无框架）之后还跑得起来吗？"——换 exe 升级前的保护性判断：
+    /// 旧应用层可能是自包含版、直接能跑；盲目清掉再装不上运行时，玩家连旧版都没了。
+    /// </summary>
+    public static bool NewAppCanRun(string baseDir, string appDir)
+    {
+        return FindLocalRuntimeZip(baseDir, appDir) is not null
+               || FindExtractedRuntime(baseDir) is not null
+               || SystemHasNet10();
     }
 
     /// <summary>粗检一个 zip 是不是像样的运行时包：能打开、里面有 dotnet.exe。</summary>

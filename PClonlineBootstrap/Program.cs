@@ -60,6 +60,7 @@ internal static class Program
 
             while (true)
             {
+                var runtimeDir = Path.Combine(baseDir, RuntimeDirName);
                 // 自展开：首次运行时释放内置应用层；之后每次启动都核对"内嵌版本 vs 应用层版本"，
                 // 不一致（最典型：玩家把新 exe 直接覆盖进旧目录）就重新释放——
                 // 否则 app\ 里永远躺着旧版程序，界面版本号对不上、图标也是旧的，
@@ -76,15 +77,36 @@ internal static class Program
                 else if (!string.IsNullOrEmpty(embeddedVer)
                          && !string.Equals(embeddedVer, localVer, StringComparison.OrdinalIgnoreCase))
                 {
-                    Log("内置版本 " + embeddedVer + " 与应用层 " + (localVer ?? "（未知）") +
-                        " 不同：清理旧应用层后重新释放…");
-                    // 旧应用层可能是自包含版（带整套运行时 dll），只覆盖不清理会新旧混装，
-                    // 版本错位的 dll 有隐患；用户数据在根目录 PCL\，删 app\ 不伤数据
-                    try { Directory.Delete(appDir, true); }
-                    catch (Exception ex) { Log("清理旧应用层失败（可能有文件被占用）：" + ex.Message); }
+                    // 升级保护：换 exe 后旧 app\ 可能是自包含版（双击就能跑的最后一版），
+                    // 清掉它之后必须保证新无框架 app 有运行时可用，否则玩家连旧版都没了。
+                    // 救不回来就保留旧版继续跑，把补救方法说清楚
+                    if (RuntimeInstaller.NewAppCanRun(baseDir, appDir))
+                    {
+                        Log("内置版本 " + embeddedVer + " 与应用层 " + (localVer ?? "（未知）") +
+                            " 不同：清理旧应用层后重新释放…");
+                        // 旧应用层可能是自包含版（带整套运行时 dll），只覆盖不清理会新旧混装，
+                        // 版本错位的 dll 有隐患；用户数据在根目录 PCL\，删 app\ 不伤数据
+                        try { Directory.Delete(appDir, true); }
+                        catch (Exception ex) { Log("清理旧应用层失败（可能有文件被占用）：" + ex.Message); }
                     ExtractApp(appDir);
                     File.WriteAllText(marker, embeddedVer + " " + DateTime.Now.ToString("s"), Encoding.UTF8);
                     Log("释放完成（" + embeddedVer + "）");
+                    // 防呆：这个 exe 不能直接双击（无框架版需要引导器带 runtime\）。
+                    // 实测有玩家会点进 app\ 双击它，结果弹系统的"缺 .NET Desktop Runtime"
+                    try
+                    {
+                        File.WriteAllText(Path.Combine(appDir, "！！别双击我——请运行上级目录的 PClonline.exe.txt"),
+                            "Plain Craft Launcher 2.exe 不能直接双击：它需要启动器装好的 .NET 运行时。\r\n"
+                            + "请回到上一级文件夹，双击 PClonline.exe 启动。\r\n");
+                    }
+                    catch { }
+                    }
+                    else
+                    {
+                        Log("内置版本 " + embeddedVer + " 与应用层 " + (localVer ?? "（未知）") +
+                            " 不同，但找不到运行时来源（同级/子目录无 net.zip、系统无 .NET 10）——"
+                            + "保留旧版继续运行，请把 net.zip 放到启动器同级目录后重启即升级");
+                    }
                 }
                 else
                 {
@@ -105,7 +127,6 @@ internal static class Program
 
                 // 应用层是无框架版：运行时装在与 app\ 平级的 runtime\ 里（装一次就再不动），
                 // 装不上就借系统里已有的；实在没有才提示玩家手动装
-                var runtimeDir = Path.Combine(baseDir, RuntimeDirName);
                 var runtimeRoot = await RuntimeInstaller.EnsureAsync(appDir, runtimeDir, manifest, Log);
                 if (runtimeRoot == "")
                 {
