@@ -56,19 +56,27 @@ def main():
         "%s:%s" % (SSH_HOST, BUNDLE_REMOTE)])
     print("bundle 已上传云机")
 
-    # 4) 云机上：clone → 校验快进 → push
+    # 4) 云机上：clone → 校验快进 → push（阿里云出境到 GitHub 时常抖动，整体重试）
     tok = io.open(TOKEN_FILE, encoding="utf-8").read().strip()
-    script = """set -e
-TOK=$(cat /dev/stdin)
-rm -rf /tmp/pr && git clone -q https://$TOK@github.com/%s.git /tmp/pr
-cd /tmp/pr
-git fetch -q %s %s:bundle-main
-# 本地历史应包含远端 main（快进）；若不包含说明本地落后或分叉，直接报错让人工处理
-git merge-base --is-ancestor origin/main bundle-main || {
-  echo NOT_FAST_FORWARD; git log --oneline origin/main -3; exit 1; }
-git push origin bundle-main:%s
-echo PUSH_OK
-git ls-remote -q origin refs/heads/%s
+    script = """TOK=$(cat /dev/stdin)
+ok=0
+for a in 1 2 3 4 5; do
+  echo "== 云机第 $a 轮 =="
+  rm -rf /tmp/pr
+  git clone -q https://$TOK@github.com/%s.git /tmp/pr || { echo CLONE_FAIL; sleep 20; continue; }
+  cd /tmp/pr
+  git fetch -q %s %s:bundle-main || { echo FETCH_FAIL; cd /; sleep 15; continue; }
+  git merge-base --is-ancestor origin/main bundle-main || {
+    echo NOT_FAST_FORWARD; git log --oneline origin/main -3; break; }
+  if git push origin bundle-main:%s; then ok=1; break; fi
+  echo PUSH_FAIL; cd /; sleep 20
+done
+if [ $ok = 1 ]; then
+  echo PUSH_OK
+  git ls-remote -q origin refs/heads/%s
+else
+  echo ALL_FAIL
+fi
 rm -rf /tmp/pr /tmp/repo.bundle
 echo CLEANED""" % (REPO, BUNDLE_REMOTE, BRANCH, BRANCH, BRANCH)
     r = subprocess.run([SSH, "-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", SSH_HOST, script],
