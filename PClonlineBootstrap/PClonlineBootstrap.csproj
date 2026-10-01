@@ -23,7 +23,7 @@
     <PublishTrimmed>true</PublishTrimmed>
     <TrimMode>full</TrimMode>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <Version>50.10.0</Version>
+    <Version>50.11.1</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -42,7 +42,7 @@ public partial class PageSetupUpdate
         }
         if (!result.HasUpdate)
         {
-            TextCurrentDesc.Text = "已是最新版本（更新通道：" + result.RemoteVersion + "）";
+            TextCurrentDesc.Text = "已是最新版本 " + VersionNameFormat(result.RemoteVersion);
             return;
         }
 

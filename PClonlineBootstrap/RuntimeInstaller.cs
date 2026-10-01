@@ -37,6 +37,15 @@ internal static class RuntimeInstaller
         var sourceUrl = manifest?.SourceUrl;
         if (string.IsNullOrWhiteSpace(sourceUrl)) sourceUrl = null;
 
+        // 0) 应用层是自包含版（v50.10.x 的老安装，runtimeconfig 用 includedFrameworks 声明）：
+        //    运行时已经打在包里，既不需要 runtime\ 也不该弹"缺运行库"的框——
+        //    老用户换新引导器后 app\ 还是旧版时，就是这种情况
+        if (IsSelfContained(appDir))
+        {
+            log("应用层自带运行时（自包含版），无需安装运行库");
+            return null;
+        }
+
         // 1) 本地 runtime\ 还在且完整 —— 更新永远走不到这里，这是常态
         if (IsComplete(runtimeDir, runtime, log))
         {
@@ -44,7 +53,48 @@ internal static class RuntimeInstaller
             return runtimeDir;
         }
 
-        // 2) 从清单给的 net.zip 装一份移动运行时
+        var baseDir = Directory.GetParent(runtimeDir)?.FullName;
+        var localZip = string.IsNullOrEmpty(baseDir) ? null : Path.Combine(baseDir, "net.zip");
+        var stamp = Path.Combine(runtimeDir, ".installed");
+
+        // 1b) 离线快速通道：清单拉不到时 IsComplete 没有校验基准，
+        //     靠安装时写的 .installed 指纹（net.zip 大小+修改时间）判定"装过且包没变"，
+        //     否则离线玩家每次启动都要重解压一遍 171MB
+        if (runtime is null && localZip is not null && File.Exists(localZip)
+            && File.Exists(stamp))
+        {
+            try
+            {
+                if (File.ReadAllText(stamp).Trim() == ZipFingerprint(localZip))
+                {
+                    log("运行时已就位（离线）：" + runtimeDir);
+                    return runtimeDir;
+                }
+            }
+            catch { /* 标记坏了就当没装过 */ }
+        }
+
+        // 2) 离线包：启动器同级目录的 net.zip（发布时的离线压缩包就是 exe + net.zip）。
+        //    必须放在"读清单"之前——离线场景清单本来就拉不到，不能因为它就装不了运行时
+        if (localZip is not null && File.Exists(localZip) && ZipLooksLikeRuntime(localZip)
+            && (runtime is null || string.IsNullOrWhiteSpace(runtime.Sha256)
+                || string.Equals(UpdateService.Sha256Of(localZip), runtime.Sha256, StringComparison.OrdinalIgnoreCase)))
+        {
+            log("使用离线运行时包：" + localZip);
+            try
+            {
+                Extract(localZip, runtimeDir, log);
+                try { File.WriteAllText(stamp, ZipFingerprint(localZip)); } catch { }
+                log("运行时安装完成：" + runtimeDir);
+                return runtimeDir;
+            }
+            catch (Exception ex)
+            {
+                log("离线运行时包解压失败：" + ex.Message + "，改走下载");
+            }
+        }
+
+        // 3) 从清单给的 net.zip 装一份移动运行时
         if (runtime is not null && !string.IsNullOrWhiteSpace(runtime.Url))
         {
             log("正在安装运行时：" + runtime.Url);
@@ -52,7 +102,7 @@ internal static class RuntimeInstaller
             if (await TryInstallPackageAsync(url, runtimeDir, runtime, log)) return runtimeDir;
         }
 
-        // 3) 兜底：玩家机器上已经装了能用的运行时，就别再拖一份几十 MB 下来
+        // 4) 兜底：玩家机器上已经装了能用的运行时，就别再拖一份几十 MB 下来
         var systemRoot = FindSystemRuntime(appDir, log);
         if (systemRoot is not null)
         {
@@ -60,6 +110,44 @@ internal static class RuntimeInstaller
             return systemRoot;
         }
         return "";
+    }
+
+    /// <summary>离线安装标记：net.zip 的大小 + 修改时间指纹。包没换过 = runtime\ 不用重装。</summary>
+    private static string ZipFingerprint(string zipPath)
+    {
+        var fi = new FileInfo(zipPath);
+        return fi.Length + ":" + fi.LastWriteTimeUtc.Ticks;
+    }
+
+    /// <summary>粗检一个 zip 是不是像样的运行时包：能打开、里面有 dotnet.exe。</summary>
+    private static bool ZipLooksLikeRuntime(string zipPath)
+    {
+        try
+        {
+            using var z = ZipFile.OpenRead(zipPath);
+            foreach (var e in z.Entries)
+            {
+                if (e.FullName.Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        catch { /* 打不开就当不是 */ }
+        return false;
+    }
+
+    /// <summary>应用层 runtimeconfig 用 includedFrameworks 声明 = 自包含发布（运行时在包里）。</summary>
+    private static bool IsSelfContained(string appDir)
+    {
+        foreach (var path in Directory.EnumerateFiles(appDir, "*.runtimeconfig.json"))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                var ro = doc.RootElement.TryGetProperty("runtimeOptions", out var r) ? r : doc.RootElement;
+                if (ro.TryGetProperty("includedFrameworks", out _)) return true;
+            }
+            catch { /* 坏文件按需安装处理 */ }
+        }
+        return false;
     }
 
     /// <summary>抽样校验 runtime\ 是否完整（文件数 + 前几个文件的 sha256）。</summary>
@@ -95,7 +183,7 @@ internal static class RuntimeInstaller
     }
 
     /// <summary>
-    /// 下 net.zip 并解压到 runtime\；解压后按清单复核关键文件。
+    /// 从清单地址下 net.zip 并解压到 runtime\；解压后按清单复核关键文件。
     ///
     /// 每步都必须有日志：这一路是「首次启动 + 走代理/弱网」最容易出事的地方，
     /// 卡住时玩家只看得见静默转圈，所以下载开始/结束/大小/校验/解压每一步都要留痕。

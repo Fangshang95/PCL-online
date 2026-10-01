@@ -205,10 +205,15 @@ def main():
         '-p:PublishSingleFile=false -o "%s" --nologo -v q' % (DOTNET, PROJ, APP_DIR),
         os.path.join(BUILD, "publish_app.log"))
 
+    # 1b. 先写应用层版本标记，再扫描/打 zip —— 顺序是铁律：
+    #     APP_DIR\version.json 里上一版构建的残留清单如果不先盖掉，
+    #     内嵌进 exe 的版本号就会永远慢一拍，玩家"换 exe 升级"后界面版本识别错误
+    with open(os.path.join(APP_DIR, "version.json"), "w", encoding="utf-8") as f:
+        json.dump({"version": version}, f)
+
     entries = scan_files(APP_DIR)
     total = sum(e["size"] for e in entries)
     print("应用层：%d 个文件，共 %.1f MB" % (len(entries), total / 1048576), flush=True)
-
     # 2. 组装运行时包（net.zip）
     print("--- 组装运行时 ---", flush=True)
     fw_list = read_frameworks(APP_DIR)
@@ -260,7 +265,8 @@ def main():
         "files": rt_entries[:200],   # 完整性抽样校验用，全量清单反而没必要下
     }
 
-    # 4. version.json + 签名
+    # 4. version.json + 签名（只写到发布目录；APP_DIR\version.json 是 1b 写的简版标记，
+    #    千万别用完整清单盖回去——下次构建又会把它当残留嵌进 exe）
     manifest = {
         "version": version,
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -268,10 +274,9 @@ def main():
         "runtime": runtime_block,
         "packages": packages,
     }
-    mpath = os.path.join(APP_DIR, "version.json")
+    mpath = os.path.join(upd_dir, "version.json")
     with open(mpath, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=1)
-    ctypes.windll.kernel32.CopyFileW(mpath, os.path.join(upd_dir, "version.json"), False)
 
     if os.path.isfile(PRIV_KEY) and os.path.isfile(SIGN_TOOL):
         run('"%s" "%s" sign "%s" "%s" "%s"' % (
@@ -307,6 +312,20 @@ def main():
     print("sha256：%s" % sha256_of(out), flush=True)
     print("发布资产：%s" % upd_dir, flush=True)
 
+    # 5b. 离线包：exe + net.zip（给连不上 GitHub / 下不动大包的玩家，解压即装、全程不联网）
+    off_zip = os.path.join(upd_dir, "PCLonline-%s-offline.zip" % version)
+    readme = ("\ufeffPClonine 离线安装包 %s\r\n\r\n"
+              "1. 把压缩包里的全部文件解压到任意文件夹（放哪都行，别放在带 # 的路径里）\r\n"
+              "2. 双击 PClonline.exe，启动器会自动释放程序并从旁边的 net.zip 安装运行时\r\n"
+              "   —— 全程不需要联网\r\n"
+              "3. 之后想升级：直接用新 exe 覆盖 PClonline.exe 即可，程序本体和用户数据都会保留\r\n"
+              "   （在能连 GitHub 的网络下，启动器也会自动检查并安装更新）\r\n") % dict(version=version)
+    with zipfile.ZipFile(off_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        z.write(out, "PClonline.exe")
+        z.write(net_zip, "net.zip")
+        z.writestr("使用说明.txt", readme)
+    print("离线包：%s（%.1f MB）" % (off_zip, os.path.getsize(off_zip) / 1048576), flush=True)
+
     # 6. 上传清单（资产名必须 ASCII，否则 GitHub 会 422 / 改写成 default.txt）
     lines = [
         "发布资产（全部传到 GitHub Release 的 latest，更新只认这一个源）：",
@@ -315,6 +334,7 @@ def main():
         "  version.json.sig  签名",
         "  app.zip            %.1f MB（无框架应用层，每次更新全量覆盖）" % (full_size / 1048576),
         "  net.zip            %.1f MB（.NET 运行时，装一次就再也不用下）" % (net_size / 1048576),
+        "  PCLonline-%s-offline.zip  离线安装包（exe + net.zip，给下不动 GitHub 的玩家）" % version,
         "",
         "清单里的包地址是相对文件名，客户端按清单来源自动拼成绝对地址：",
         "  GitHub  → " + GH_BASE + "/app.zip",

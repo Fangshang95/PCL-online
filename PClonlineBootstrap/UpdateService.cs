@@ -299,7 +299,8 @@ internal static class UpdateService
         try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
     }
 
-    private static string? LocalVersion(string appDir)
+    /// <summary>读 app\version.json 里的版本标记（引导器自展开/更新后都会写）。</summary>
+    public static string? LocalVersion(string appDir)
     {
         try
         {

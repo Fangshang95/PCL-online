@@ -60,17 +60,31 @@ internal static class Program
 
             while (true)
             {
-                // 自展开：首次运行（或标记缺失）时释放内置应用层
+                // 自展开：首次运行时释放内置应用层；之后每次启动都核对"内嵌版本 vs 应用层版本"，
+                // 不一致（最典型：玩家把新 exe 直接覆盖进旧目录）就重新释放——
+                // 否则 app\ 里永远躺着旧版程序，界面版本号对不上、图标也是旧的，
+                // 只能指望 GitHub 更新追平，而那一步在大包下不动时永远等不来
+                var embeddedVer = EmbeddedVersion();
+                var localVer = UpdateService.LocalVersion(appDir);
                 if (!File.Exists(marker))
                 {
                     Log("首次运行：释放内置运行文件到 " + AppDirName + "…");
                     ExtractApp(appDir);
-                    File.WriteAllText(marker, DateTime.Now.ToString("s"), Encoding.UTF8);
-                    Log("释放完成");
+                    File.WriteAllText(marker, (embeddedVer ?? "") + " " + DateTime.Now.ToString("s"), Encoding.UTF8);
+                    Log("释放完成" + (string.IsNullOrEmpty(embeddedVer) ? "" : "（" + embeddedVer + "）"));
+                }
+                else if (!string.IsNullOrEmpty(embeddedVer)
+                         && !string.Equals(embeddedVer, localVer, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log("内置版本 " + embeddedVer + " 与应用层 " + (localVer ?? "（未知）") +
+                        " 不同：重新释放内置运行文件…");
+                    ExtractApp(appDir);
+                    File.WriteAllText(marker, embeddedVer + " " + DateTime.Now.ToString("s"), Encoding.UTF8);
+                    Log("释放完成（" + embeddedVer + "）");
                 }
                 else
                 {
-                    Log("已展开，跳过释放（标记时间 " + File.ReadAllText(marker).Trim() + "）");
+                    Log("已展开，跳过释放（应用层 " + (localVer ?? "未知") + "）");
                 }
 
                 // 全量更新（只换 app\，运行时目录不参与；失败一律不阻断启动）
@@ -92,8 +106,9 @@ internal static class Program
                 if (runtimeRoot == "")
                 {
                     MessageBoxW(IntPtr.Zero,
-                        "启动器需要 .NET 运行时，自动下载安装失败。\n" +
-                        "请手动安装 .NET 10 Desktop Runtime 后重新双击启动器：\n" +
+                        "启动器需要 .NET 运行时，自动下载失败。\n" +
+                        "① 把离线包里的 net.zip 放到启动器同级目录，重新双击启动器；或\n" +
+                        "② 手动安装 .NET 10 Desktop Runtime：\n" +
                         "https://dotnet.microsoft.com/download/dotnet/10.0",
                         "PClonline 需要安装运行库", 0x40);
                 }
@@ -131,6 +146,27 @@ internal static class Program
         {
             Log("启动失败：" + ex);
             return 1;
+        }
+    }
+
+    /// <summary>读内嵌 app.zip 里 version.json 的版本号（exe 即版本：换 exe 就等于换应用层）。</summary>
+    private static string EmbeddedVersion()
+    {
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            using var stream = asm.GetManifestResourceStream(ResourceName);
+            if (stream is null) return "";
+            using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
+            var entry = zip.GetEntry("version.json");
+            if (entry is null) return "";
+            using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+            using var doc = System.Text.Json.JsonDocument.Parse(reader.ReadToEnd());
+            return doc.RootElement.TryGetProperty("version", out var v) ? (v.GetString() ?? "") : "";
+        }
+        catch
+        {
+            return "";
         }
     }
 
