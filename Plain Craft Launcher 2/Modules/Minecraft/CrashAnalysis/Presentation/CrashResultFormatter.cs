@@ -510,16 +510,8 @@ internal sealed class CrashResultFormatter
 
     private static string? _GetLauncherOutdatedSuggestion()
     {
-        try
-        {
-            return UpdateManager.GetVersionStatus() == UpdateEnums.VersionStatus.Latest
-                ? null
-                : Lang.Text("Crash.Suggestion.LauncherOutdated");
-        }
-        catch (Exception ex)
-        {
-            LogWrapper.Error(ex, "Crash", "确认启动器更新失败");
-            return null;
-        }
+        // MCStudio 定制版：版本状态由热更新通道负责（社区源已移除），
+        // 崩溃报告里不再给出"启动器版本过旧"的建议
+        return null;
     }
 }

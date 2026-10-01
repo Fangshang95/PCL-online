@@ -591,8 +591,8 @@ public partial class FormMain
         // Await LobbyController.CloseAsync().ConfigureAwait(False)
         ModBase.isProgramEnded = true;
         ModAnimation.AniControlEnabled += 1;
-        if (UpdateManager.isUpdateWaitingRestart && !isUpdating)
-            UpdateManager.UpdateRestart(false, false);
+        // 旧社区更新链路已移除：不再有"退出时重启安装已下载更新"的流程，
+        // PClonline 的更新由 HotUpdateService 写标记、引导器在退出后完成
         if (returnCode == ModBase.ProcessReturnValues.Exception)
         {
             if (!isLogShown)
@@ -2111,12 +2111,14 @@ public partial class FormMain
     // 更新重启
     private void BtnExtraUpdateRestart_Click(object sender, MouseButtonEventArgs e)
     {
-        UpdateManager.UpdateRestart(true);
+        // 旧社区更新链路已移除：PClonline 的更新在 设置 → 更新 中完成（检查后"退出并更新"）
+        HintService.Hint("请到 设置 → 更新 完成升级", HintType.Info);
     }
 
     private bool BtnExtraUpdateRestart_ShowCheck()
     {
-        return UpdateManager.isUpdateWaitingRestart;
+        // 旧链路移除后不会再有"已下载待重启安装"的状态，附加按钮保持隐藏
+        return false;
     }
 
     // 音乐

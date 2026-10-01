@@ -3587,22 +3587,8 @@ public static class ModBase
 
     public static bool CanFeedback(bool showHint)
     {
-        var stat = UpdateManager.GetVersionStatus();
-        if (stat == UpdateEnums.VersionStatus.Latest) return true;
-
-        if (!showHint) return false;
-
-        if (ModMain.MyMsgBox(
-                stat == UpdateEnums.VersionStatus.NotLatest
-                    ? Lang.Text("Setup.Feedback.Unavailable.NotLatest.Message")
-                    : Lang.Text("Setup.Feedback.Unavailable.CheckFailed.Message"),
-                Lang.Text("Setup.Feedback.Unavailable.Title"),
-                stat == UpdateEnums.VersionStatus.NotLatest
-                    ? Lang.Text("Setup.Feedback.Unavailable.NotLatest.Action")
-                    : Lang.Text("Setup.Feedback.Unavailable.CheckFailed.Action"),
-                Lang.Text("Common.Action.Cancel")) == 1)
-            ModMain.frmMain.PageChange(FormMain.PageType.Setup, FormMain.PageSubType.SetupUpdate);
-
+        // MCStudio 定制版：社区反馈渠道已停用（错误只落本地日志），
+        // 不再依赖"是否最新版本"来放行，因此这里恒为 false
         return false;
     }
 

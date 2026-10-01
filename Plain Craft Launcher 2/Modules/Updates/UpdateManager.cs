@@ -1,6 +1,7 @@
-﻿using System.ComponentModel;
-using System.Diagnostics;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using PCL.Core.App;
 using PCL.Core.App.Localization;
 using PCL.Core.Utils;
@@ -10,222 +11,49 @@ namespace PCL;
 
 public static class UpdateManager
 {
-    public static bool isUpdateWaitingRestart;
-
     /// <summary>
-    ///     MCStudio 定制版标记：官方更新源分发的是社区版 exe，自动/手动更新会用它覆盖定制版，
-    ///     因此所有在线更新通道一律停用，更新走 MCStudio 分发渠道（zip 重装）。
+    ///     MCStudio 定制版标记：启动器自身的更新只走 HotUpdateService + 引导器
+    ///     （清单 = GitHub Releases 优先、自建服务器兜底），与社区更新源完全无关。
+    ///     旧社区更新链路（Mirror酱 / Pysio / Naids / CE GitHub 源）已于 v50.10.2 整体移除。
     /// </summary>
     public const bool IsMcStudioBuild = true;
 
-    public static UpdatesWrapperModel remoteServer = new(new List<IUpdateSource>
+    /// <summary>旧链路遗留字段，现已无写入方，恒为 false，仅为兼容外部引用保留。</summary>
+    public static bool isUpdateWaitingRestart;
+
+    /// <summary>
+    ///     仅用于"导出整合包时内嵌 PCL"：从社区源取最新正式版 PCL CE 给玩家打包用，
+    ///     与启动器自身更新无关。
+    /// </summary>
+    internal static readonly UpdatesWrapperModel packExportServer = new(new List<IUpdateSource>
     {
-        new UpdatesMirrorChyanModel(),
-        new UpdatesRandomModel(new[]
-        {
-            new UpdatesMinioModel("https://s3.pysio.online/pcl2-ce/", "Pysio"),
-            new UpdatesMinioModel("https://staticassets.naids.com/resources/pclce/", "Naids")
-        }),
-        new UpdatesMinioModel("https://github.com/PCL-Community/PCL2_CE_Server/raw/main/", "GitHub")
+        new UpdatesMinioModel("https://github.com/PCL-Community/PCL2_CE_Server/raw/main/", "GitHub"),
+        new UpdatesMinioModel("https://s3.pysio.online/pcl2-ce/", "Pysio"),
+        new UpdatesMinioModel("https://staticassets.naids.com/resources/pclce/", "Naids")
     });
 
-    public static bool IsCurrentVersionBeta
-    {
-        get
-        {
-            if (ModBase.versionBaseName.Contains("beta"))
-                return true;
-            return (int)Config.Update.UpdateChannel == 1;
-        }
-    }
-    
+    /// <summary>
+    ///     旧链路遗留入口：社区源已移除，PClonline 的版本状态一律由 HotUpdateService 判断。
+    ///     这里恒返回 Unknown，避免调用方误判"不是最新版"。
+    /// </summary>
     public static UpdateEnums.VersionStatus GetVersionStatus()
     {
-        // MCStudio 定制版与社区版版本线无关，不做远程比对（避免误显示"有新版"与无谓请求）
-        if (IsMcStudioBuild) return UpdateEnums.VersionStatus.Unknown;
-        try
-        {
-            if (IsCurrentVersionBeta && (int)Config.Update.UpdateChannel != 1)
-            {
-                var isNewerThanStable = remoteServer.IsLatest(UpdateChannel.stable,
-                    SystemInfo.IsArm64System ? UpdateArch.arm64 : UpdateArch.x64, SemVer.Parse(ModBase.versionBaseName),
-                    ModBase.versionCode);
-                var isBetaLatest = remoteServer.IsLatest(UpdateChannel.beta,
-                    SystemInfo.IsArm64System ? UpdateArch.arm64 : UpdateArch.x64, SemVer.Parse(ModBase.versionBaseName),
-                    ModBase.versionCode);
-                return isNewerThanStable && isBetaLatest
-                    ? UpdateEnums.VersionStatus.Latest
-                    : UpdateEnums.VersionStatus.NotLatest;
-            }
-
-            return remoteServer.IsLatest(
-                IsCurrentVersionBeta ? UpdateChannel.beta : UpdateChannel.stable,
-                SystemInfo.IsArm64System ? UpdateArch.arm64 : UpdateArch.x64, SemVer.Parse(ModBase.versionBaseName),
-                ModBase.versionCode)
-                ? UpdateEnums.VersionStatus.Latest
-                : UpdateEnums.VersionStatus.NotLatest;
-        }
-        catch (Exception ex)
-        {
-            ModBase.Log(
-                ex,
-                Lang.Text("Update.Check.Failed"),
-                ModBase.LogLevel.Hint,
-                userSummary: Lang.Text("Update.Check.Failed"));
-            return UpdateEnums.VersionStatus.Unknown;
-        }
-    }
-    
-    public static ModLoader.LoaderCombo<JsonObject> updateLoader;
-
-    public static void UpdateStart(UpdateEnums.UpdateType type, string receivedKey = null, bool forceValidated = false)
-    {
-        if (IsMcStudioBuild)
-        {
-            // 官方更新源提供的是社区版 exe，更新会覆盖 MCStudio 定制版——一律拦截
-            ModBase.Log("[Update] MCStudio 定制版已停用在线更新，请通过分发渠道（zip 重装）更新");
-            if (type != UpdateEnums.UpdateType.Silent)
-                ModBase.RunInUi(() => ModMain.MyMsgBox(
-                    "这是 MCStudio 定制版启动器，已停用在线更新以避免被社区版覆盖。\n新版本请从分发渠道（安装包/群文件）获取并解压覆盖。",
-                    "更新已停用", "知道了"));
-            return;
-        }
-        var dlTargetPath = ModBase.exePath + @"PCL\Plain Craft Launcher Community Edition.exe";
-        ModBase.RunInNewThread(() =>
-        {
-            try
-            {
-                var version = remoteServer.GetLatestVersion(
-                    IsCurrentVersionBeta ? UpdateChannel.beta : UpdateChannel.stable,
-                    SystemInfo.IsArm64System ? UpdateArch.arm64 : UpdateArch.x64
-                );
-
-                ModBase.WriteFile($"{ModBase.pathTemp}CEUpdateLog.md", version.Changelog);
-                ModBase.Log($"[Update] 远程最新版本: {version.VersionName}, 当前版本: {ModBase.versionBaseName}");
-                if (!(SemVer.Parse(version.VersionName) > SemVer.Parse(ModBase.versionBaseName)))
-                    return;
-                if (type == UpdateEnums.UpdateType.PromptOnly)
-                {
-                    ModBase.RunInUi(() =>
-                    {
-                        if (ModMain.MyMsgBox(
-                                Lang.Text("Update.Available", ModBase.versionBaseName, version.VersionName),
-                                Lang.Text("Update.Title"),
-                                Lang.Text("Update.Action"),
-                                Lang.Text("Common.Action.Cancel")
-                            ) == 1)
-                            ModMain.frmMain.PageChange(FormMain.PageType.Setup, FormMain.PageSubType.SetupUpdate);
-                    });
-                    return;
-                    // 构造步骤加载器
-                }
-
-                var loaders = new List<ModLoader.LoaderBase>();
-                // 下载
-                loaders.AddRange(remoteServer.GetDownloadLoader(
-                    IsCurrentVersionBeta ? UpdateChannel.beta : UpdateChannel.stable,
-                    SystemInfo.IsArm64System ? UpdateArch.arm64 : UpdateArch.x64, dlTargetPath));
-                loaders.Add(new ModLoader.LoaderTask<int, int>(Lang.Text("Update.Task.Check"), _ =>
-                {
-                    var curHash = ModBase.GetFileSHA256(dlTargetPath);
-                    if ((curHash ?? "") != (version.Sha256 ?? ""))
-                        throw new Exception(Lang.Text("Update.Error.Sha256Mismatch", version.Sha256, curHash));
-                }));
-                if (type == UpdateEnums.UpdateType.UpdateNow)
-                    loaders.Add(new ModLoader.LoaderTask<int, int>(Lang.Text("Update.Task.Install"), _ => UpdateRestart(true)));
-                else if (type == UpdateEnums.UpdateType.Silent)
-                    loaders.Add(new ModLoader.LoaderTask<int, int>(Lang.Text("Update.Task.Prepare"), _ => isUpdateWaitingRestart = true));
-                else if (type == UpdateEnums.UpdateType.DownloadAndPrompt)
-                    loaders.Add(new ModLoader.LoaderTask<int, int>(Lang.Text("Update.Task.ShowButton"), _ =>
-                    {
-                        isUpdateWaitingRestart = true;
-                        ModBase.RunInUi(() =>
-                        {
-                            ModMain.frmMain.BtnExtraUpdateRestart.ToolTip =
-                                Lang.Text("Main.Extra.UpdateRestart.ToolTipWithVersion", ModBase.versionBaseName, version.VersionName);
-                            ModMain.frmMain.BtnExtraUpdateRestart.ShowRefresh();
-                            ModMain.frmMain.BtnExtraUpdateRestart.Ribble();
-                        });
-                    })
-                    {
-                        show = false
-                    });
-                loaders.Add(new ModLoader.LoaderTask<int, int>(Lang.Text("Update.Task.RefreshSettings"), _ =>
-                {
-                    if (ModMain.frmSetupUpdate is not null)
-                        ModBase.RunInUi(() =>
-                        {
-                            ModMain.frmSetupUpdate.BtnUpdate.Text = Lang.Text("Update.Task.RestartInstall");
-                            ModMain.frmSetupUpdate.BtnUpdate.IsEnabled = true;
-                        });
-                })
-                {
-                    show = false
-                });
-                // 启动
-                updateLoader = new ModLoader.LoaderCombo<JsonObject>(Lang.Text("Update.Title"), loaders);
-                updateLoader.Start();
-                if (type == UpdateEnums.UpdateType.UpdateNow)
-                {
-                    ModLoader.LoaderTaskbarAdd(updateLoader);
-                    ModMain.frmMain.BtnExtraDownload.ShowRefresh();
-                    ModMain.frmMain.BtnExtraDownload.Ribble();
-                }
-            }
-            catch (Exception ex)
-            {
-                ModBase.Log(ex, "[Update] 获取启动器更新失败");
-                if (type != UpdateEnums.UpdateType.Silent)
-                    HintService.Hint(Lang.Text("Update.Error.FetchFailed"), HintType.Error);
-            }
-        });
+        return UpdateEnums.VersionStatus.Unknown;
     }
 
-    public static void UpdateRestart(bool triggerRestartAndByEnd, bool triggerRestart = true)
-    {
-        try
-        {
-            var fileName = ModBase.exePath + @"PCL\Plain Craft Launcher Community Edition.exe";
-            if (!File.Exists(fileName))
-            {
-                ModBase.Log("[System] 更新失败：未找到更新文件");
-                return;
-            }
-
-            // id old new restart
-            var text =
-                $"update {Process.GetCurrentProcess().Id} \"{Basics.ExecutablePath}\" \"{fileName}\" {(triggerRestart ? "true" : "false")}";
-            ModBase.Log("[System] 更新程序启动，参数：" + text);
-            Process.Start(new ProcessStartInfo(fileName)
-                { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, Arguments = text });
-            if (triggerRestartAndByEnd)
-            {
-                ModMain.frmMain.EndProgram(false, true);
-                ModBase.Log("[System] 已由于更新强制结束程序");
-            }
-        }
-        catch (Win32Exception ex)
-        {
-            ModBase.Log(ex, "自动更新时触发 Win32 错误，疑似被拦截");
-            ModMain.MyMsgBox(
-                Lang.Text("Update.Error.UpdateBlockedMessage", ModBase.exePath),
-                Lang.Text("Update.Error.UpdateBlocked"),
-                Lang.Text("Common.Action.Confirm"),
-                "",
-                "",
-                true);
-        }
-    }
+    /// <summary>生命周期占位：社区公告与自动检查已随旧链路移除，此加载器立即完成。</summary>
+    public static ModLoader.LoaderTask<int, int> serverLoader =
+        new(Lang.Text("Update.Service.PclCe"), _ => { }, priority: ThreadPriority.BelowNormal);
 
     /// <summary>
     ///     确保 PathTemp 下的 Latest.exe 是最新正式版的 PCL，它会被用于整合包打包。
-    ///     如果不是，则下载一个。
+    ///     如果不是，则下载一个。（与启动器自身更新无关）
     /// </summary>
     internal static void DownloadLatestPCL(ModLoader.LoaderBase loaderToSyncProgress = null)
     {
-        // 注意：如果要自行实现这个功能，请换用另一个文件路径，以免与官方版本冲突
+        // 注意：导出整合包内嵌的是社区正式版 PCL CE，与 PClonline 自身的更新互不相干
         var latestPCLPath = Path.Combine(ModBase.pathTemp, "CE-Latest.exe");
-        var target = remoteServer.GetLatestVersion(UpdateChannel.stable,
+        var target = packExportServer.GetLatestVersion(UpdateChannel.stable,
             SystemInfo.IsArm64System ? UpdateArch.arm64 : UpdateArch.x64);
         if (target is null)
             throw new Exception(Lang.Text("Update.Error.UnableToGetUpdate"));
@@ -235,62 +63,16 @@ public static class UpdateManager
             return;
         }
 
-        if ((ModBase.GetFileSHA256(Basics.ExecutablePath) ?? "") == (target.Sha256 ?? "")) // 正在使用的版本符合要求，直接拿来用
+        if ((ModBase.GetFileSHA256(Basics.ExecutablePath) ?? "") == (target.Sha256 ?? ""))
         {
             ModBase.CopyFile(Basics.ExecutablePath, latestPCLPath);
             return;
         }
 
-        var loaders = remoteServer.GetDownloadLoader(UpdateChannel.stable,
+        var loaders = packExportServer.GetDownloadLoader(UpdateChannel.stable,
             SystemInfo.IsArm64System ? UpdateArch.arm64 : UpdateArch.x64, latestPCLPath);
         var loader = new ModLoader.LoaderCombo<int>(Lang.Text("Update.Task.DownloadLatestStable"), loaders);
         loader.Start();
         loader.WaitForExit();
-    }
-
-    public static ModLoader.LoaderTask<int, int> serverLoader =
-        new(Lang.Text("Update.Service.PclCe"),
-            _ => LoadOnlineInfo(),
-            priority: ThreadPriority.BelowNormal);
-
-    private static void LoadOnlineInfo()
-    {
-        // MCStudio 定制版：不连社区源——更新检查（ScheduleBasedOnConfig）与公告（AnnouncementService）全部停用，
-        // serverLoader 仅作生命周期占位，立即完成
-        ModBase.Log("[Update] MCStudio 定制版：跳过社区公告与更新检查（在线更新已停用）");
-    }
-
-    private static void ScheduleBasedOnConfig()
-    {
-        switch (Config.Update.UpdateMode)
-        {
-            case LauncherAutoUpdateBehavior.DownloadAndInstall:
-                ModBase.Log("[Update] 更新设置: 自动下载并安装更新");
-                if (GetVersionStatus() != UpdateEnums.VersionStatus.Latest)
-                    UpdateStart(UpdateEnums.UpdateType.Silent);
-                break;
-            case LauncherAutoUpdateBehavior.DownloadAndAnnounce:
-                ModBase.Log("[Update] 更新设置: 自动下载并提示更新");
-                UpdateStart(UpdateEnums.UpdateType.DownloadAndPrompt);
-                break;
-            case LauncherAutoUpdateBehavior.AnnounceOnly:
-                ModBase.Log("[Update] 更新设置: 提示更新");
-                UpdateStart(UpdateEnums.UpdateType.PromptOnly);
-                break;
-            default:
-                ModBase.Log("[Update] 更新设置: 不自动检查更新");
-                return;
-        }
-    }
-
-    /// <summary>
-    ///     展示社区版提示
-    /// </summary>
-    /// <param name="IsUpdate">是否为更新时启动</param>
-    public static void ShowCEAnnounce()
-    {
-        ModMain.MyMsgBox(Lang.Text("Update.CommunityNotice.Body"),
-            Lang.Text("Update.CommunityNotice.Title"),
-            Lang.Text("Update.CommunityNotice.Confirm"));
     }
 }

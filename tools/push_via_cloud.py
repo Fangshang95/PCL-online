@@ -56,18 +56,17 @@ def main():
         "%s:%s" % (SSH_HOST, BUNDLE_REMOTE)])
     print("bundle 已上传云机")
 
-    # 4) 云机上：clone → rebase → push
+    # 4) 云机上：clone → 校验快进 → push
     tok = io.open(TOKEN_FILE, encoding="utf-8").read().strip()
     script = """set -e
 TOK=$(cat /dev/stdin)
 rm -rf /tmp/pr && git clone -q https://$TOK@github.com/%s.git /tmp/pr
 cd /tmp/pr
-git config user.name Fangshang95
-git config user.email 335926345+Fangshang95@users.noreply.github.com
 git fetch -q %s %s:bundle-main
-git rebase -X theirs --onto main --root bundle-main >/dev/null 2>&1 || {
-  echo REBASE_CONFLICT; git status --porcelain | head -5; exit 1; }
-git push -q origin bundle-main:%s
+# 本地历史应包含远端 main（快进）；若不包含说明本地落后或分叉，直接报错让人工处理
+git merge-base --is-ancestor origin/main bundle-main || {
+  echo NOT_FAST_FORWARD; git log --oneline origin/main -3; exit 1; }
+git push origin bundle-main:%s
 echo PUSH_OK
 git ls-remote -q origin refs/heads/%s
 rm -rf /tmp/pr /tmp/repo.bundle
