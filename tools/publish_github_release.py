@@ -151,11 +151,39 @@ def upload_asset(tok, repo, rel, path, max_try=3):
             if code in (200, 201):
                 print("  已上传 %s（%.1f MB）" % (name, size / 1048576.0))
                 return True
+            if code == 422:
+                # 同名资产已经在 Release 里：POST 重传会被 GitHub 直接 422。
+                # 注意 GitHub 没有"覆盖资产内容"的接口（PATCH 只能改 name/label），
+                # 要换内容只能先 DELETE 再 POST（--force 重发依赖这条）。
+                aid = next((x["id"] for x in rel.get("assets", []) if x["name"] == name), None)
+                if aid:
+                    code2, info2 = api(tok, "DELETE", "/repos/%s/releases/assets/%d" % (repo, aid))
+                    if code2 in (200, 204):
+                        code, info = api(tok, "POST", url[len(UPLOAD):], raw=body,
+                                         host=UPLOAD, ctype=ctype)
+                        if code in (200, 201):
+                            print("  已覆盖上传 %s（%.1f MB）" % (name, size / 1048576.0))
+                            return True
+                        print("  第 %d 次重传 %s 失败 %s：%s"
+                              % (attempt, name, code, str(info.get("message"))[:120]))
+                    else:
+                        print("  第 %d 次删除旧资产 %s 失败 %s" % (attempt, name, code2))
+                    continue
             print("  第 %d 次上传 %s 失败 %s：%s" % (attempt, name, code, info.get("message")))
         except Exception as e:
             print("  第 %d 次上传 %s 异常：%s" % (attempt, name, str(e)[:200]))
         time.sleep(3 * attempt)
     return False
+
+
+def verify_release(tok, repo, tag, names):
+    """用 API 核对 Release 里每个资产的尺寸（不下载：本机代理会把大文件 502 掉，
+    而且下载校验也验证不了"字节对不对"，只能验证"可达"，不如直接问 API）。"""
+    code, rel = api(tok, "GET", "/repos/%s/releases/tags/%s" % (repo, urllib.parse.quote(tag)))
+    if code != 200:
+        return {n: "API %s" % code for n in names}
+    got = {x["name"]: x.get("size", -1) for x in rel.get("assets", [])}
+    return {n: got.get(n, "缺失") for n in names}
 
 
 def verify(tok, repo, name):
@@ -181,6 +209,10 @@ def main():
     ap.add_argument("--notes", default="", help="Release 说明")
     ap.add_argument("--create-repo", action="store_true", help="仓库不存在时自动创建（Public）")
     ap.add_argument("--skip-verify", action="store_true")
+    # 重传：本地资产只是重新打包（字节变了但大小一样）时，按大小判断会误跳过，
+    # 结果远端清单 sha256 和真发到玩家手上的字节对不上
+    ap.add_argument("--force", action="store_true",
+                    help="忽略「已存在且大小一致」的判断，全部重新上传")
     a = ap.parse_args()
 
     repo = a.repo
@@ -206,10 +238,11 @@ def main():
 
     have = {x["name"]: x.get("size", -1) for x in rel.get("assets", [])}
     todo = [p for p in assets
-            if os.path.basename(p) not in have or have[os.path.basename(p)] != os.path.getsize(p)]
+            if a.force or os.path.basename(p) not in have
+            or have[os.path.basename(p)] != os.path.getsize(p)]
     for p in assets:
         n = os.path.basename(p)
-        if p not in todo:
+        if p not in todo and not a.force:
             print("  跳过 %s（Release 中已存在且大小一致）" % n)
 
     ok = True
@@ -217,12 +250,10 @@ def main():
         if not upload_asset(tok, repo, rel, p):
             ok = False
 
-    if a.skip_verify:
-        return 0 if ok else 1
-    print("--- 校验 latest/download 可达性 ---")
-    for p in assets:
-        n = os.path.basename(p)
-        print("  %s -> %s" % (n, verify(tok, repo, n)))
+    print("--- 校验 Release 资产 ---")
+    names = [os.path.basename(p) for p in assets]
+    for n, v in sorted(verify_release(tok, repo, a.tag, names).items()):
+        print("  %-20s %s" % (n, v))
     print("清单地址：https://github.com/%s/releases/latest/download/version.json" % repo)
     return 0 if ok else 1
 

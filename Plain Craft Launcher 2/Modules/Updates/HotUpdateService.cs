@@ -113,28 +113,18 @@ public static class HotUpdateService
         }
     }
 
-    /// <summary>选包展示用：与引导器同逻辑——优先匹配本地版本的增量包，否则全量兜底。</summary>
+    /// <summary>选包展示用：v50.11 起只有一种包——全量无框架版（app.zip），整体覆盖 app\。</summary>
     private static (long Size, bool Incremental) PickPackage(JsonElement root, string local)
     {
         if (root.TryGetProperty("packages", out var ps) && ps.ValueKind == JsonValueKind.Array)
         {
-            long patchSize = -1, fullSize = -1;
             foreach (var p in ps.EnumerateArray())
             {
                 var type = p.TryGetProperty("type", out var t) ? t.GetString() : null;
+                if (!string.Equals(type, "full", StringComparison.OrdinalIgnoreCase)) continue;
                 var size = p.TryGetProperty("size", out var s) && s.TryGetInt64(out var n) ? n : 0;
-                if (string.Equals(type, "patch", StringComparison.OrdinalIgnoreCase))
-                {
-                    var from = p.TryGetProperty("from", out var f) ? f.GetString() : null;
-                    if (from == local) patchSize = size;
-                }
-                else if (string.Equals(type, "full", StringComparison.OrdinalIgnoreCase))
-                {
-                    fullSize = size;
-                }
+                return (size, false);
             }
-            if (patchSize >= 0) return (patchSize, true);
-            if (fullSize >= 0) return (fullSize, false);
         }
         return (0, false);
     }
