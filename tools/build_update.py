@@ -4,7 +4,7 @@
 v50.10 热更新打包脚本
 
 流程：
-  1. 发布应用层（非单文件自包含）→ build/app_layer
+  1. 发布应用层（自包含，自带 .NET 运行时）→ build/app_layer
   2. 逐文件算 sha256，生成文件级清单（增量更新的依据）
   3. 压缩为 app.zip（全量包）+ 内嵌到引导器
   4. 与 baseline 里的各历史版本比对，为每个旧版本生成"只含变化文件"的增量包
@@ -12,10 +12,17 @@ v50.10 热更新打包脚本
   6. 发布引导器（单文件自包含）→ dist/PCLonline-alpha-<date>-<ver>.exe
   7. 产出可上传的发布资产到 dist/<version>/update/
 
+「框架随包走、更新无框架」约定（v50.10.3）：
+  · 全量包 app.zip 自包含，玩家第一次下载后 .NET 运行时就在 app\ 里就位，双击即用；
+  · 增量包只打「sha256 变化的文件」——运行时文件不变，自然一个都不进包，
+    所以后续更新永远是无框架版（本次实测：全量 60MB 级、增量 9.9MB 级）；
+  · 引导器里保留了「发现应用层声明运行时就自动下载安装」的兜底（RuntimeInstaller），
+    将来哪天改发无框架应用层，老机器也能自愈。
+
 用法：
-  python build_update.py v50.10.1              # 正常打包
-  python build_update.py v50.10.1 --reuse-app  # 复用已发布的应用层（只重建包/清单）
-  python build_update.py v50.10.1 --no-patch   # 不为历史版本生成增量包
+  python build_update.py v50.10.3              # 正常打包
+  python build_update.py v50.10.3 --reuse-app  # 复用已发布的应用层（只重建包/清单）
+  python build_update.py v50.10.3 --no-patch   # 不为历史版本生成增量包
 """
 import ctypes
 import datetime
@@ -48,20 +55,8 @@ if os.path.isfile(GH_REPO_FILE):
         GH_REPO = _s
 GH_BASE = "https://github.com/%s/releases/latest/download" % GH_REPO
 
-# 自建服务器地址同样不写死：从环境变量或 secrets/deploy.json 读（该文件不入库）。
-# 仓库公开后不会泄露服务器地址。
-DEPLOY_FILE = os.path.join(SECRETS, "deploy.json")
-SERVER_BASE = ""
-_cfg = {}
-if os.path.isfile(DEPLOY_FILE):
-    try:
-        _cfg = json.load(open(DEPLOY_FILE, encoding="utf-8"))
-    except Exception:
-        _cfg = {}
-_srv_host = os.environ.get("PCL_DEPLOY_HOST", "") or _cfg.get("host", "")
-if _srv_host:
-    SERVER_BASE = "http://%s:%s/v1/update" % (
-        _srv_host.split("@")[-1], os.environ.get("PCL_DEPLOY_PORT", "") or _cfg.get("port", 8801))
+# 更新分发**只走 GitHub**（客户端只有一个清单源）。
+# 自建更新服务器（/v1/update/*）已下线，不再需要 deploy.json / publish_server_update.py。
 
 ENV = dict(os.environ)
 ENV["DOTNET_ROOT"] = r"D:\PClonline\dotnet-sdk"
@@ -151,7 +146,7 @@ def main():
     if reuse and os.path.isdir(APP_DIR):
         print("复用已发布的应用层：" + APP_DIR, flush=True)
     else:
-        # 1. 发布应用层（非单文件，便于逐文件增量更新）
+        # 1. 发布应用层（自包含 + 非单文件，运行时随全量包到位、逐文件可增量更新）
         run('"%s" publish "%s" -c Release -p:Platform=x64 -p:SelfContained=true '
             '-p:PublishSingleFile=false -o "%s" --nologo -v q' % (DOTNET, PROJ, APP_DIR),
             os.path.join(BUILD, "publish_app.log"))
@@ -265,11 +260,11 @@ def main():
 
     # 7. 上传清单，方便手工拖到 GitHub Release / 传到服务器
     lines = [
-        "发布资产（上传到 GitHub Release 的 latest，或放到服务器 /opt/tunnel-api/update/）：",
+        "发布资产（全部传到 GitHub Release 的 latest，更新只认这一个源）：",
         "",
         "  version.json",
         "  version.json.sig",
-        "  app.zip            %.1f MB（全量兜底）" % (full_size / 1048576),
+        "  app.zip            %.1f MB（全量兜底，无框架版）" % (full_size / 1048576),
     ]
     for p in packages:
         if p["type"] == "patch":
@@ -278,18 +273,15 @@ def main():
         "",
         "清单里的包地址是相对文件名，客户端按清单来源自动拼成绝对地址：",
         "  GitHub  → " + GH_BASE + "/app.zip",
-        "  服务器  → " + (SERVER_BASE + "/app.zip" if SERVER_BASE
-                          else "（未配置：设 PCL_DEPLOY_HOST 或写 secrets/deploy.json）"),
         "",
         "一键发布：",
         "  python tools\\publish_github_release.py --tag " + version + " --dir " + upd_dir,
-        "  python tools\\publish_server_update.py --dir " + upd_dir,
         "",
         "上传要求：",
-        "  · GitHub：这些资产必须都在同一个 latest Release 里（latest/download 前缀要求）",
-        "  · 服务器：整个 update/ 目录内容放到 /opt/tunnel-api/update/ 下",
+        "  · 这些资产必须都在同一个 latest Release 里（latest/download 前缀要求）",
         "  · version.json 与 version.json.sig 必须成对更新（签名针对文件原始字节，",
-        "    服务器会原样返回，任何改动都会导致验签失败）",
+        "    Release 会原样返回，任何改动都会导致验签失败）",
+        "  · app.zip 自包含（自带 .NET 运行时），所以玩家首次下载即可用，不需要另装运行库",
     ]
     with open(os.path.join(upd_dir, "上传说明.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

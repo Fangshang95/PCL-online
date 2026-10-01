@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """把一版更新资产发布到自建服务器，使其成为完整的文件级增量更新源。
 
+【已废弃 · v50.10.3 起】客户端更新只认 GitHub 一个源，不再同步到自建服务器（/v1/update/* 路由下线）。
+保留本脚本仅供历史回滚查询用，新版本不要用。
+
 服务器的 /v1/update/* 路由直接按文件名从 /opt/tunnel-api/update/ 取文件，
 所以只要把 version.json / version.json.sig / app.zip / patch-*.zip 放进去即可，
 不需要改服务端代码。

@@ -18,10 +18,13 @@ namespace PCL;
 /// </summary>
 public static class HotUpdateService
 {
+    /// <summary>
+    /// 更新清单只走 GitHub Releases（唯一源）。自建更新服务器已从客户端整体移除，
+    /// 之前它只是个"闲时兜底"，现在改由 GitHub 承担。
+    /// </summary>
     private static readonly string[] DefaultManifestUrls =
     [
         "https://github.com/Fangshang95/PCL-online/releases/latest/download/version.json",
-        "http://120.26.198.92:8801/v1/update/manifest",
     ];
 
     /// <summary>应用层的版本标记：引导器自展开与每次更新后都会写 app\version.json。</summary>

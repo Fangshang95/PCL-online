@@ -17,7 +17,7 @@ public partial class PageSetupUpdate
 
     private void Init()
     {
-        // PClonline 唯一更新入口：清单与引导器共用同一份（GitHub Releases 优先 / 自建服务器兜底）。
+        // PClonline 唯一更新入口：只用 GitHub Releases 一份清单（与引导器同源）。
         // 旧社区更新链路的 UI 与逻辑已整体移除，不再保留分支。
         ModAnimation.AniControlEnabled += 1;
         TextCurrentVersion.Text = "PClonline " + VersionNameFormat(HotUpdateService.CurrentVersion);

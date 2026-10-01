@@ -14,17 +14,18 @@ namespace PClonlineBootstrap;
 /// </summary>
 internal static class Program
 {
-    private const string AppDirName = "app";
-    private const string AppExeName = "Plain Craft Launcher 2.exe";
+    internal const string AppDirName = "app";
+    internal const string AppExeName = "Plain Craft Launcher 2.exe";
     private const string MarkerName = ".bootstrapped";
     private const string ResourceName = "PClonlineBootstrap.app.zip";
 
-    /// <summary>默认更新清单源，按顺序尝试（第一个可用的为准）。
-    /// 服务器那个接口由服务端自行判断"在线人数少且带宽空闲"才返回清单，否则跳过。</summary>
+    /// <summary>
+    /// 更新清单唯一来源：GitHub Releases（客户端只认这一个源）。
+    /// 自建更新服务器（/v1/update/manifest）已连同它的分发功能一起下线。
+    /// </summary>
     private static readonly string[] DefaultManifestUrls =
     [
         "https://github.com/Fangshang95/PCL-online/releases/latest/download/version.json",
-        "http://120.26.198.92:8801/v1/update/manifest",
     ];
 
     /// <summary>
@@ -84,6 +85,18 @@ internal static class Program
                     return 2;
                 }
 
+                // 应用层是自 50.10.3 起改用的「无框架版」：运行时不再随更新包下发，
+                // 首次（或更新到无框架版之后）由这里自动下载安装；装不上也照样尝试拉起，交给应用自己报错
+                var runtimeRoot = await RuntimeInstaller.EnsureAsync(appDir, Log);
+                if (runtimeRoot == "")
+                {
+                    MessageBoxW(IntPtr.Zero,
+                        "启动器需要 .NET 运行时，自动下载安装失败。\n" +
+                        "请手动安装 .NET 10 Desktop Runtime 后重新双击启动器：\n" +
+                        "https://dotnet.microsoft.com/download/dotnet/10.0",
+                        "PClonline 需要安装运行库", 0x40);
+                }
+
                 Log("拉起应用：" + exe);
                 var psi = new ProcessStartInfo(exe) { WorkingDirectory = baseDir };
                 // 应用层搬到了 app\ 子目录，但用户数据（实例/版本/设置/日志/服务器档案）
@@ -91,6 +104,12 @@ internal static class Program
                 // PCL_DATA_DIR：PCL.Core.Basics.ExecutableDirectory 会优先采用它；
                 // 工作目录设为 baseDir，让 mcstudio 配置的旧位置兜底也能命中。
                 psi.Environment["PCL_DATA_DIR"] = baseDir;
+                if (!string.IsNullOrEmpty(runtimeRoot))
+                {
+                    // 运行时装在了用户目录（无需管理员权限），拉起应用时指过去
+                    psi.Environment["DOTNET_ROOT"] = runtimeRoot;
+                    Log("运行时目录：" + runtimeRoot);
+                }
                 Log("数据目录：" + baseDir + "（工作目录同此）");
                 foreach (var a in args) psi.ArgumentList.Add(a);
                 using var proc = Process.Start(psi);
@@ -146,6 +165,10 @@ internal static class Program
         }
         Log($"释放完成：新增 {done} 个，跳过（已完整）{skipped} 个");
     }
+
+    /// <summary>原生弹窗：避免为了一个提示把 WinForms/WPF 拖进引导器。</summary>
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int MessageBoxW(IntPtr hWnd, string lpText, string lpCaption, uint uType);
 
     private static void Log(string message)
     {
