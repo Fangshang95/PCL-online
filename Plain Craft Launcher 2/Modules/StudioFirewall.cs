@@ -118,19 +118,28 @@ public static class StudioFirewall
         }
     }
 
-    /// <summary>UAC 自提权重启自身（不带参数 = 正常启动，管理员身份下自动完成防护）。</summary>
+    /// <summary>UAC 自提权重启（不带参数 = 正常启动，管理员身份下自动完成防护）。</summary>
     public static void ElevateRestart(bool andExit = false)
     {
         try
         {
             var exe = ExePath;
             if (string.IsNullOrEmpty(exe)) return;
+            // v50.11.4：提权后的新进程**不继承环境变量**（引导器传的 DOTNET_ROOT 就在里面），
+            // 直接提权启动主程序必然弹"You must install .NET Desktop Runtime"然后闪退。
+            // 解法：提权启动引导器 PClonline.exe（app\ 的上级目录）——它自己会设好 DOTNET_ROOT
+            // 再拉起主程序，链路闭环；老式自包含结构（无引导器）才退回提权启动自身
+            var boot = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(exe) ?? ".", "..", "PClonline.exe"));
+            var target = File.Exists(boot) ? boot : exe;
+            if (target == exe && !File.Exists(boot))
+                ModBase.Log("[Firewall] 未找到引导器，提权启动主程序自身（自包含结构）");
             // v50.9.11：必须先释放单例锁再拉起新进程——否则新进程看到锁还在会判定为
             // 重复实例而退出，而旧进程随后也退出（20:24 的失败链条：两边都没了）
             try { PCL.Core.App.Essentials.SingleInstanceService.ReleaseLock(); }
             catch (Exception ex) { ModBase.Log("[Firewall] 释放单例锁失败：" + ex.Message); }
-            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, Verb = "runas" });
-            ModBase.Log("[Firewall] 已请求以管理员身份重启");
+            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true, Verb = "runas" });
+            ModBase.Log("[Firewall] 已请求以管理员身份重启（经引导器：" + (target == boot) + "）");
             if (andExit)
             {
                 // 让新实例先起来，再结束当前普通权限实例
@@ -144,7 +153,7 @@ public static class StudioFirewall
         catch (Exception ex)
         {
             ModBase.Log("[Firewall] 管理员重启失败：" + ex.Message);
-            HintService.Hint("以管理员身份重启失败，请手动右键启动器 → 以管理员身份运行", HintType.Warning);
+            HintService.Hint("以管理员身份重启失败，请手动右键 PClonline.exe → 以管理员身份运行", HintType.Warning);
         }
     }
 

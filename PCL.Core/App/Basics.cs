@@ -197,7 +197,7 @@ public static class Basics
         return resourceInfo?.Stream;
     }
 
-    private const string AssemblyImagePath = "pack://application:,,,/Plain Craft Launcher 2;component/Images/";
+    private const string AssemblyImagePath = "pack://application:,,,/PClonine;component/Images/";
     public static string GetAppImagePath(string imageName) => AssemblyImagePath + imageName;
 
     #endregion

@@ -16,7 +16,7 @@ internal static class Program
 {
     internal const string AppDirName = "app";
     internal const string RuntimeDirName = "runtime";
-    internal const string AppExeName = "Plain Craft Launcher 2.exe";
+    internal const string AppExeName = "PClonine.exe";
     private const string MarkerName = ".bootstrapped";
     private const string ResourceName = "PClonlineBootstrap.app.zip";
 
@@ -95,8 +95,8 @@ internal static class Program
                     // 实测有玩家会点进 app\ 双击它，结果弹系统的"缺 .NET Desktop Runtime"
                     try
                     {
-                        File.WriteAllText(Path.Combine(appDir, "！！别双击我——请运行上级目录的 PClonline.exe.txt"),
-                            "Plain Craft Launcher 2.exe 不能直接双击：它需要启动器装好的 .NET 运行时。\r\n"
+                        File.WriteAllText(Path.Combine(appDir, "！！别双击我——请运行上级目录的 PClonine.exe.txt"),
+                            "PClonine.exe（主程序）不能直接双击：它需要启动器装好的 .NET 运行时。\r\n"
                             + "请回到上一级文件夹，双击 PClonline.exe 启动。\r\n");
                     }
                     catch { }
