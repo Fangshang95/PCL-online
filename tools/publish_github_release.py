@@ -42,6 +42,15 @@ CTYPES = {
 }
 
 
+def nfc(name):
+    """Release 资产名只接受 ASCII：中文名会被 GitHub 改写成 default.txt 或直接 422。"""
+    try:
+        name.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
 def die(msg):
     sys.exit("错误：" + msg)
 
@@ -184,6 +193,8 @@ def main():
     if not os.path.isdir(d):
         die("资产目录不存在：" + d)
     assets = [os.path.join(d, n) for n in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d, n))]
+    # 非 ASCII 资产名会被 GitHub 做成 default.txt 或直接 422，一律本地保留不出包
+    assets = [p for p in assets if nfc(os.path.basename(p))]
     if not assets:
         die("资产目录为空：" + d)
     print("待发布资产：%s" % ", ".join("%s(%.1fMB)" % (os.path.basename(p), os.path.getsize(p) / 1048576.0)

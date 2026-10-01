@@ -283,7 +283,8 @@ def main():
         "    Release 会原样返回，任何改动都会导致验签失败）",
         "  · app.zip 自包含（自带 .NET 运行时），所以玩家首次下载即可用，不需要另装运行库",
     ]
-    with open(os.path.join(upd_dir, "上传说明.txt"), "w", encoding="utf-8") as f:
+    # 资产名必须是 ASCII，否则 GitHub Release 会 422 或改名成 default.txt
+    with open(os.path.join(upd_dir, "upload-notes.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
     # 清理引导器项目里的临时 zip（避免误提交进 git）

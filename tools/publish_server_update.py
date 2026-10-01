@@ -107,7 +107,7 @@ def main():
         die("资产目录不存在：" + d)
     files = [n for n in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d, n))]
     # 说明文本不必上传
-    files = [n for n in files if not n.endswith("上传说明.txt")]
+    files = [n for n in files if not n.endswith("upload-notes.txt")]
     if not files:
         die("资产目录为空：" + d)
     if "version.json" not in files:
