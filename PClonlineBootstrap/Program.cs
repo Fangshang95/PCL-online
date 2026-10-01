@@ -77,7 +77,11 @@ internal static class Program
                          && !string.Equals(embeddedVer, localVer, StringComparison.OrdinalIgnoreCase))
                 {
                     Log("内置版本 " + embeddedVer + " 与应用层 " + (localVer ?? "（未知）") +
-                        " 不同：重新释放内置运行文件…");
+                        " 不同：清理旧应用层后重新释放…");
+                    // 旧应用层可能是自包含版（带整套运行时 dll），只覆盖不清理会新旧混装，
+                    // 版本错位的 dll 有隐患；用户数据在根目录 PCL\，删 app\ 不伤数据
+                    try { Directory.Delete(appDir, true); }
+                    catch (Exception ex) { Log("清理旧应用层失败（可能有文件被占用）：" + ex.Message); }
                     ExtractApp(appDir);
                     File.WriteAllText(marker, embeddedVer + " " + DateTime.Now.ToString("s"), Encoding.UTF8);
                     Log("释放完成（" + embeddedVer + "）");
