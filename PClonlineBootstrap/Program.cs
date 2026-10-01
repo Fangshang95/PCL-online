@@ -109,12 +109,17 @@ internal static class Program
                 var runtimeRoot = await RuntimeInstaller.EnsureAsync(appDir, runtimeDir, manifest, Log);
                 if (runtimeRoot == "")
                 {
+                    // 没有运行时还硬拉起无框架程序 = 玩家看到的就是"闪一下就没了"。
+                    // 这里停下来把话说清楚，比让他反复双击强
                     MessageBoxW(IntPtr.Zero,
-                        "启动器需要 .NET 运行时，自动下载失败。\n" +
-                        "① 把离线包里的 net.zip 放到启动器同级目录，重新双击启动器；或\n" +
+                        "启动器需要 .NET 运行时，自动下载失败，你的电脑上也没装。\n\n" +
+                        "解决办法（任选一个）：\n" +
+                        "① 把离线包里的 net.zip 放到启动器同级目录，重新双击（推荐，不用联网）\n" +
                         "② 手动安装 .NET 10 Desktop Runtime：\n" +
-                        "https://dotnet.microsoft.com/download/dotnet/10.0",
+                        "https://dotnet.microsoft.com/download/dotnet/10.0\n\n" +
+                        "装好以后再双击就能直接启动了。",
                         "PClonline 需要安装运行库", 0x40);
+                    return 4;
                 }
 
                 Log("拉起应用：" + exe);

@@ -322,7 +322,9 @@ def main():
               "   （在能连 GitHub 的网络下，启动器也会自动检查并安装更新）\r\n") % dict(version=version)
     with zipfile.ZipFile(off_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         z.write(out, "PClonline.exe")
-        z.write(net_zip, "net.zip")
+        # net.zip 本身就是压缩包，再 DEFLATE 一遍几乎不省体积（实测省 0.6%）却让解压慢好几倍，
+        # 直接原样存进去——玩家用任何解压工具都能秒开
+        z.write(net_zip, "net.zip", zipfile.ZIP_STORED)
         z.writestr("使用说明.txt", readme)
     print("离线包：%s（%.1f MB）" % (off_zip, os.path.getsize(off_zip) / 1048576), flush=True)
 

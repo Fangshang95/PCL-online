@@ -56,6 +56,12 @@ internal static class RuntimeInstaller
         var baseDir = Directory.GetParent(runtimeDir)?.FullName;
         var localZip = string.IsNullOrEmpty(baseDir) ? null : Path.Combine(baseDir, "net.zip");
         var stamp = Path.Combine(runtimeDir, ".installed");
+        if (localZip is not null && File.Exists(localZip) && !ZipLooksLikeRuntime(localZip))
+        {
+            // 最常见的成因：从 GitHub 下大包没下完就解压了。别静默跳过，明说
+            log("旁边的 net.zip 打不开或不是运行时包（多半是下载/解压不完整），将尝试联网下载；"
+                + "建议重新解压离线压缩包");
+        }
 
         // 1b) 离线快速通道：清单拉不到时 IsComplete 没有校验基准，
         //     靠安装时写的 .installed 指纹（net.zip 大小+修改时间）判定"装过且包没变"，
@@ -204,14 +210,17 @@ internal static class RuntimeInstaller
             else
             {
                 log("下载运行时包：" + url);
-                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                // 2 分钟够了（70MB 正常网速几十秒）。再等下去没有意义：
+                // 卡住的玩家只会看到"双击没反应"，不如早退给系统运行时 / 明确提示
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
                 try
                 {
                     await UpdateService.DownloadAsync(url, zip, log, cts.Token);
                 }
                 catch (OperationCanceledException)
                 {
-                    log("下载运行时包超时（10 分钟），跳过联网安装");
+                    log("下载运行时包超时（2 分钟），改用系统运行时；"
+                        + "若系统里也没有，请把离线包里的 net.zip 放到启动器同级目录再双击");
                     return false;
                 }
                 var got = new FileInfo(zip);
