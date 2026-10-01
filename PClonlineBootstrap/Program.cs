@@ -15,6 +15,7 @@ namespace PClonlineBootstrap;
 internal static class Program
 {
     internal const string AppDirName = "app";
+    internal const string RuntimeDirName = "runtime";
     internal const string AppExeName = "Plain Craft Launcher 2.exe";
     private const string MarkerName = ".bootstrapped";
     private const string ResourceName = "PClonlineBootstrap.app.zip";
@@ -72,11 +73,10 @@ internal static class Program
                     Log("已展开，跳过释放（标记时间 " + File.ReadAllText(marker).Trim() + "）");
                 }
 
-                // 增量更新（清单比对 → 多源下载 → sha256 校验 → 原子替换 → 失败回滚）
-                // 更新失败一律不阻断启动
+                // 全量更新（只换 app\，运行时目录不参与；失败一律不阻断启动）
                 var urls = ManifestUrls();
                 Log("更新清单源：" + string.Join(" | ", urls));
-                await UpdateService.RunAsync(appDir, urls, Log);
+                var manifest = await UpdateService.RunAsync(appDir, urls, Log);
 
                 var exe = Path.Combine(appDir, AppExeName);
                 if (!File.Exists(exe))
@@ -85,9 +85,10 @@ internal static class Program
                     return 2;
                 }
 
-                // 应用层是自 50.10.3 起改用的「无框架版」：运行时不再随更新包下发，
-                // 首次（或更新到无框架版之后）由这里自动下载安装；装不上也照样尝试拉起，交给应用自己报错
-                var runtimeRoot = await RuntimeInstaller.EnsureAsync(appDir, Log);
+                // 应用层是无框架版：运行时装在与 app\ 平级的 runtime\ 里（装一次就再不动），
+                // 装不上就借系统里已有的；实在没有才提示玩家手动装
+                var runtimeDir = Path.Combine(baseDir, RuntimeDirName);
+                var runtimeRoot = await RuntimeInstaller.EnsureAsync(appDir, runtimeDir, manifest, Log);
                 if (runtimeRoot == "")
                 {
                     MessageBoxW(IntPtr.Zero,

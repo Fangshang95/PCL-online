@@ -2,36 +2,42 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Threading;
 
 namespace PClonlineBootstrap;
 
-/// <summary>清单里的单个文件（增量更新的依据：path + sha256）。</summary>
+/// <summary>清单里的单个文件（sha256 校验用）。</summary>
 internal sealed record ManifestFile(string Path, long Size, string Sha256);
 
 /// <summary>
-/// 可下载的包。
-/// type=patch：From 表示"从哪个版本增量升级"，包内只含变化的文件，Remove 列出新版本已删除的文件；
-/// type=full ：全量兜底（任何版本都能升），From 为空、Remove 为空。
+/// 清单里的运行时包（net.zip）：缺运行时时下它，解压到 runtime\ 当移动运行时用。
+/// Files 只取一份抽样（构建侧截断到 200 条），够校验完整性、不必整套下下来。
 /// </summary>
-internal sealed record ManifestPackage(string Type, string From, string Url, long Size, string Sha256,
-                                      List<string> Remove);
+internal sealed record ManifestRuntime(string Url, long Size, string Sha256, int Count,
+                                        IReadOnlyList<ManifestFile> Files);
 
-/// <summary>远端更新清单（由 build_update.py 生成并随包发布）。
-/// SourceUrl = 清单实际取自哪个地址，用于把包里的相对文件名解析成绝对地址。</summary>
-internal sealed record UpdateManifest(string Version, List<ManifestFile> Files, List<ManifestPackage> Packages,
+/// <summary>
+/// 可下载的应用层包。v50.11 起只有一种：全量无框架版（每次更新整体覆盖 app\），
+/// 多基线 / 文件级 diff 那套复杂度已经去掉。
+/// </summary>
+internal sealed record ManifestPackage(string Type, string From, string Url, long Size, string Sha256);
+
+/// <summary>远端更新清单（由 build_update.py 生成并随包发布）。</summary>
+internal sealed record UpdateManifest(string Version, IReadOnlyList<ManifestFile> Files,
+                                      ManifestRuntime? Runtime, IReadOnlyList<ManifestPackage> Packages,
                                       string SourceUrl);
 
 /// <summary>
-/// 增量更新服务（v50.10）。
+/// 更新服务（v50.11，两层分离：runtime\ 不动，app\ 全量覆盖）。
 ///
-/// 流程：拉清单（含签名）→ 验签 → 与本地版本比对 → 选包（优先匹配本地版本的增量包，否则全量兜底）
-///       → 下载到 staging → 校验包 sha256 → 解压并逐文件校验 sha256
-///       → 备份旧文件 → 原子替换 + 删除废弃文件 → 记录本地版本；任一步失败即从备份回滚。
+/// 流程：拉清单（验签）→ 与本地版本比对 → 下 app.zip（全量无框架版）
+///       → 校验包 sha256 → 逐文件 sha256 复核 → 覆盖写 app\ → 写版本标记。
 ///
-/// 两条硬规则：
+/// 三条硬规则：
 ///   ① 任何异常都不阻断启动（更新是增益，不是前提）；
-///   ② 内容以 sha256 为准，来源以 ECDSA 签名为准——后续接入 P2P 玩家互传 / CDN 镜像时
-///      来源不可信，但内容可验证，防止镜像源投毒。
+///   ② 内容以 sha256 为准，来源以 ECDSA 签名为准（将来接 P2P / CDN 镜像时来源不可信但内容可验）；
+///   ③ 坏包在落地前就拦掉：包校验 + 逐文件复核都过了才写盘，所以不做备份回滚
+///      （覆盖中途失败的话本地版本标记仍是旧的，下次启动会重新更新一遍）。
 /// </summary>
 internal static class UpdateService
 {
@@ -44,52 +50,50 @@ internal static class UpdateService
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(60) };
 
-    public static async Task RunAsync(string appDir, IReadOnlyList<string> manifestUrls, Action<string> log)
+    /// <summary>拉清单并执行更新。返回解析后的清单（供运行时安装复用），没拿到就返回 null。</summary>
+    public static async Task<UpdateManifest?> RunAsync(string appDir, IReadOnlyList<string> manifestUrls,
+                                                       Action<string> log)
     {
+        // 声明在 try 外：catch 之后还要把它交给运行时安装器
+        UpdateManifest? manifest = null;
         try
         {
-            var manifest = await FetchManifestAsync(manifestUrls, log);
-            if (manifest is null) { log("未能获取更新清单，跳过更新"); return; }
+            manifest = await FetchManifestAsync(manifestUrls, log);
+            if (manifest is null) { log("未能获取更新清单，跳过更新"); return null; }
 
             var localVer = LocalVersion(appDir);
             if (!string.IsNullOrEmpty(localVer) && localVer == manifest.Version)
             {
                 log("已是最新版本：" + manifest.Version);
-                return;
+                return manifest;
             }
             log($"发现更新：{localVer ?? "（未知）"} → {manifest.Version}");
 
-            var patch = manifest.Packages?.FirstOrDefault(p =>
-                string.Equals(p.Type, "patch", StringComparison.OrdinalIgnoreCase) && p.From == localVer);
-            var full = manifest.Packages?.FirstOrDefault(p =>
+            // v50.11 起只有全量无框架包：不管本地是哪个版本，一律拉 app.zip 覆盖
+            var pkg = manifest.Packages?.FirstOrDefault(p =>
                 string.Equals(p.Type, "full", StringComparison.OrdinalIgnoreCase));
-            var pkg = patch ?? full;
-            if (pkg is null) { log("清单中没有可用的更新包，跳过"); return; }
-            // 清单里的包地址是相对文件名（这样同一份清单放到 GitHub / 自建服务器都成立，
-            // 且服务器可以原样返回文件、不破坏签名），这里按清单来源解析成绝对地址
+            if (pkg is null) { log("清单中没有可用的更新包，跳过"); return manifest; }
             var pkgUrl = ResolveUrl(manifest.SourceUrl, pkg.Url);
-            log($"使用{(patch is not null ? "增量" : "全量")}包：{pkgUrl}（{pkg.Size / 1048576} MB）");
+            log($"使用全量包：{pkgUrl}（{pkg.Size / 1048576} MB）");
 
             var stagingDir = Path.Combine(appDir, ".staging");
-            var backupDir = Path.Combine(appDir, ".backup");
-            var pkgPath = Path.Combine(stagingDir, "update.zip");
+            var pkgPath = Path.Combine(stagingDir, "app.zip");
 
             try
             {
                 Directory.CreateDirectory(stagingDir);
                 await DownloadAsync(pkgUrl, pkgPath, log);
-                var actual = Sha256Of(pkgPath);
-                if (!string.Equals(actual, pkg.Sha256, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(Sha256Of(pkgPath), pkg.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
                     log("更新包校验失败（sha256 不符），放弃本次更新");
-                    return;
+                    return manifest;
                 }
 
                 var extractDir = Path.Combine(stagingDir, "files");
                 Directory.CreateDirectory(extractDir);
                 ZipFile.ExtractToDirectory(pkgPath, extractDir, overwriteFiles: true);
 
-                // 校验待替换文件：以清单 sha256 为准，不符则整包放弃（不落地半个更新）
+                // 落地前逐文件复核：以清单 sha256 为准，一个不符就整包放弃（不落地半个更新）
                 var pending = new List<string>();
                 foreach (var file in Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories))
                 {
@@ -98,30 +102,40 @@ internal static class UpdateService
                     if (expect is not null && !string.Equals(Sha256Of(file), expect.Sha256, StringComparison.OrdinalIgnoreCase))
                     {
                         log("文件内容校验失败：" + rel + "，放弃本次更新");
-                        return;
+                        return manifest;
                     }
                     pending.Add(rel);
                 }
 
-                // 新版本里已不存在的文件（增量包用 remove 标注，全量包为空）
-                var removals = (pkg.Remove ?? new List<string>())
-                    .Where(r => !string.IsNullOrWhiteSpace(r)).Distinct().ToList();
-
-                Apply(appDir, extractDir, pending, removals, backupDir, log);
+                Overwrite(appDir, extractDir, pending.Count, log);
                 File.WriteAllText(Path.Combine(appDir, "version.json"),
                     "{\"version\":\"" + manifest.Version.Replace("\\", "").Replace("\"", "") + "\"}");
-                log($"更新完成：{manifest.Version}（替换 {pending.Count} 个，删除 {removals.Count} 个）");
+                log($"更新完成：{manifest.Version}（覆盖 {pending.Count} 个文件）");
             }
             finally
             {
                 TryDeleteDir(stagingDir);
-                TryDeleteDir(backupDir);
             }
         }
         catch (Exception ex)
         {
             log("更新失败（不影响启动）：" + ex.Message);
         }
+        return manifest;
+    }
+
+    /// <summary>覆盖写 app\：新文件直接盖住旧的，不删旧文件（残留的旧 dll 不会被 deps.json 加载）。</summary>
+    private static void Overwrite(string appDir, string extractDir, int count, Action<string> log)
+    {
+        foreach (var file in Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(extractDir, file).Replace("\\", "/");
+            var target = Path.Combine(appDir, rel.Replace("/", Path.DirectorySeparatorChar.ToString()));
+            var dir = Path.GetDirectoryName(target);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.Copy(file, target, overwrite: true);
+        }
+        log($"已覆盖 {count} 个文件到 app\\");
     }
 
     private static async Task<UpdateManifest?> FetchManifestAsync(IReadOnlyList<string> urls, Action<string> log)
@@ -194,8 +208,30 @@ internal static class UpdateService
                 files.Add(new ManifestFile(
                     f.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "",
                     f.TryGetProperty("size", out var s) && s.TryGetInt64(out var sz) ? sz : 0,
-                    f.TryGetProperty("sha256", out var h) ? h.GetString() ?? "" : ""));
+                    f.TryGetProperty("sha256", out var h) ? (h.GetString() ?? "") : ""));
             }
+        }
+
+        ManifestRuntime? runtime = null;
+        if (root.TryGetProperty("runtime", out var rt) && rt.ValueKind == JsonValueKind.Object)
+        {
+            var probes = new List<ManifestFile>();
+            if (rt.TryGetProperty("files", out var rfs) && rfs.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var f in rfs.EnumerateArray())
+                {
+                    probes.Add(new ManifestFile(
+                        f.TryGetProperty("path", out var p2) ? p2.GetString() ?? "" : "",
+                        f.TryGetProperty("size", out var s2) && s2.TryGetInt64(out var sz2) ? sz2 : 0,
+                        f.TryGetProperty("sha256", out var h2) ? (h2.GetString() ?? "") : ""));
+                }
+            }
+            runtime = new ManifestRuntime(
+                rt.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "",
+                rt.TryGetProperty("size", out var s3) && s3.TryGetInt64(out var n3) ? n3 : 0,
+                rt.TryGetProperty("sha256", out var sh) ? sh.GetString() ?? "" : "",
+                rt.TryGetProperty("count", out var c) && c.TryGetInt32(out var cn) ? cn : 0,
+                probes);
         }
 
         var pkgs = new List<ManifestPackage>();
@@ -203,51 +239,43 @@ internal static class UpdateService
         {
             foreach (var p in ps.EnumerateArray())
             {
-                var remove = new List<string>();
-                if (p.TryGetProperty("remove", out var rm) && rm.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var r in rm.EnumerateArray())
-                    {
-                        var s = r.GetString();
-                        if (!string.IsNullOrEmpty(s)) remove.Add(s);
-                    }
-                }
                 pkgs.Add(new ManifestPackage(
                     p.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "",
                     p.TryGetProperty("from", out var fr) ? fr.GetString() ?? "" : "",
-                    p.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "",
-                    p.TryGetProperty("size", out var s2) && s2.TryGetInt64(out var n) ? n : 0,
-                    p.TryGetProperty("sha256", out var sh) ? sh.GetString() ?? "" : "",
-                    remove));
+                    p.TryGetProperty("url", out var u2) ? u2.GetString() ?? "" : "",
+                    p.TryGetProperty("size", out var s4) && s4.TryGetInt64(out var n4) ? n4 : 0,
+                    p.TryGetProperty("sha256", out var sh2) ? (sh2.GetString() ?? "") : ""));
             }
         }
-        return new UpdateManifest(version, files, pkgs, "");
+        return new UpdateManifest(version, files, runtime, pkgs, "");
     }
 
     /// <summary>把清单里的相对文件名解析成绝对下载地址（已是绝对地址则原样返回）。</summary>
-    private static string ResolveUrl(string manifestUrl, string url)
+    public static string ResolveUrl(string manifestUrl, string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return url;
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
             || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return url;
-        var i = manifestUrl.LastIndexOf('/');
-        return i < 0 ? url : manifestUrl[..(i + 1)] + url.TrimStart('/');
+        var i = (manifestUrl ?? "").LastIndexOf('/');
+        return i < 0 ? url : manifestUrl![..(i + 1)] + url.TrimStart('/');
     }
 
-    private static async Task DownloadAsync(string url, string dest, Action<string> log)
+    /// <summary>带进度地下载到目标文件（更新包和 net.zip 共用）。</summary>
+    public static async Task DownloadAsync(string url, string dest, Action<string> log,
+                                           CancellationToken token = default)
     {
-        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
         resp.EnsureSuccessStatusCode();
         var total = resp.Content.Headers.ContentLength ?? -1;
         await using var fs = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None);
-        await using var src = await resp.Content.ReadAsStreamAsync();
+        await using var src = await resp.Content.ReadAsStreamAsync(token);
         var buffer = new byte[1 << 16];
         long read = 0;
         var lastReport = 0L;
         int n;
-        while ((n = await src.ReadAsync(buffer)) > 0)
+        while ((n = await src.ReadAsync(buffer, token)) > 0)
         {
-            await fs.WriteAsync(buffer.AsMemory(0, n));
+            await fs.WriteAsync(buffer.AsMemory(0, n), token);
             read += n;
             if (read - lastReport >= 8 << 20)
             {
@@ -260,53 +288,15 @@ internal static class UpdateService
         log($"下载完成 {read / 1048576} MB");
     }
 
-    /// <summary>备份旧文件 → 逐文件替换 / 删除；中途失败从备份整体回滚。</summary>
-    private static void Apply(string appDir, string extractDir, List<string> rels, List<string> removals,
-                              string backupDir, Action<string> log)
+    public static string Sha256Of(string path)
     {
-        Directory.CreateDirectory(backupDir);
-        var moved = new List<string>();
-        var deleted = new List<string>();
-        try
-        {
-            foreach (var rel in rels)
-            {
-                var target = Path.Combine(appDir, rel.Replace("/", Path.DirectorySeparatorChar.ToString()));
-                var src = Path.Combine(extractDir, rel.Replace("/", Path.DirectorySeparatorChar.ToString()));
-                var dir = Path.GetDirectoryName(target);
-                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
+    }
 
-                if (File.Exists(target))
-                {
-                    File.Move(target, Path.Combine(backupDir, rel.Replace("/", "_")), overwrite: true);
-                    moved.Add(rel);
-                }
-                File.Move(src, target, overwrite: true);
-            }
-            foreach (var rel in removals)
-            {
-                var target = Path.Combine(appDir, rel.Replace("/", Path.DirectorySeparatorChar.ToString()));
-                if (!File.Exists(target)) continue;
-                File.Move(target, Path.Combine(backupDir, rel.Replace("/", "_")), overwrite: true);
-                deleted.Add(rel);
-            }
-            log($"已替换 {moved.Count} 个（新增 {rels.Count - moved.Count} 个），删除 {deleted.Count} 个");
-        }
-        catch
-        {
-            log("替换过程出错，正在回滚…");
-            foreach (var rel in moved.Concat(deleted))
-            {
-                try
-                {
-                    var target = Path.Combine(appDir, rel.Replace("/", Path.DirectorySeparatorChar.ToString()));
-                    var bak = Path.Combine(backupDir, rel.Replace("/", "_"));
-                    if (File.Exists(bak)) File.Move(bak, target, overwrite: true);
-                }
-                catch { /* 尽力回滚 */ }
-            }
-            throw;
-        }
+    private static void TryDeleteDir(string dir)
+    {
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
     }
 
     private static string? LocalVersion(string appDir)
@@ -319,16 +309,5 @@ internal static class UpdateService
             return doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() : null;
         }
         catch { return null; }
-    }
-
-    private static string Sha256Of(string path)
-    {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
-    }
-
-    private static void TryDeleteDir(string dir)
-    {
-        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
     }
 }

@@ -1,52 +1,56 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-v50.10 热更新打包脚本
+r"""
+v50.11 热更新打包脚本（两层分离：运行时 / 应用层）
 
-流程：
-  1. 发布应用层（自包含，自带 .NET 运行时）→ build/app_layer
-  2. 逐文件算 sha256，生成文件级清单（增量更新的依据）
-  3. 压缩为 app.zip（全量包）+ 内嵌到引导器
-  4. 与 baseline 里的各历史版本比对，为每个旧版本生成"只含变化文件"的增量包
-  5. 写入 version.json（files / packages / remove）→ 用 ECDSA 私钥签名
-  6. 发布引导器（单文件自包含）→ dist/PCLonline-alpha-<date>-<ver>.exe
-  7. 产出可上传的发布资产到 dist/<version>/update/
+结构（v50.11 起，取代 v50.10 的「全量自包含 + 文件级增量」方案）：
+  运行时 runtime\  —— 只装一次，之后永不动
+  应用层 app\      —— 每次更新全量覆盖
 
-「框架随包走、更新无框架」约定（v50.10.3）：
-  · 全量包 app.zip 自包含，玩家第一次下载后 .NET 运行时就在 app\ 里就位，双击即用；
-  · 增量包只打「sha256 变化的文件」——运行时文件不变，自然一个都不进包，
-    所以后续更新永远是无框架版（本次实测：全量 60MB 级、增量 9.9MB 级）；
-  · 引导器里保留了「发现应用层声明运行时就自动下载安装」的兜底（RuntimeInstaller），
-    将来哪天改发无框架应用层，老机器也能自愈。
+产出（放到同一个 GitHub Release 的 latest 下）：
+  version.json     清单（ECDSA 签名）
+  version.json.sig 签名
+  app.zip          无框架应用层（framework-dependent，不含运行时）
+  net.zip          .NET 运行时包（hostfxr + shared\<framework>\<ver>\*）
+
+玩家侧流程：
+  1. 首跑：exe 内嵌 app.zip → 自展开到 app\（只有应用层，几十个文件）
+  2. 缺运行时：引导器先探测系统里有没有够用的 .NET 10；没有就下 net.zip
+     解压到 runtime\（标准安装布局），之后每次更新都不会再碰它
+  3. 更新：只下 app.zip 全量，覆盖 app\ 里的文件，运行时目录完全不动
+  → 于是「基线版本 / diff / remove 列表 / 多份 patch」这套复杂度全部消失
+
+为什么 net.zip 直接取自本机 SDK：
+  sc（self-contained）publish 出来的是「apphost + 运行时 dll 平铺」，
+  不能直接当 DOTNET_ROOT 用（hostfxr 要找 shared\<framework>\<ver>\ 布局），
+  所以这里按 fx 应用声明的框架版本，从 SDK 根目录挑出
+  {dotnet.exe, hostfxr.dll, hostpolicy.dll, shared\<name>\<ver>\*\*} 打成包。
 
 用法：
-  python build_update.py v50.10.3              # 正常打包
-  python build_update.py v50.10.3 --reuse-app  # 复用已发布的应用层（只重建包/清单）
-  python build_update.py v50.10.3 --no-patch   # 不为历史版本生成增量包
+  python build_update.py v50.11.0
 """
 import ctypes
 import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
 
 DOTNET = r"D:\PClonline\dotnet-sdk\dotnet.exe"
+SDK_DIR = r"D:\PClonline\dotnet-sdk"
 PROJ = r"D:\PClonline\pcl2-ce\Plain Craft Launcher 2\Plain Craft Launcher 2.csproj"
 BOOT_DIR = r"D:\PClonline\pcl2-ce\PClonlineBootstrap"
 BOOT_PROJ = os.path.join(BOOT_DIR, "PClonlineBootstrap.csproj")
 BUILD = r"D:\PClonline\build"
-APP_DIR = os.path.join(BUILD, "app_layer")
+APP_DIR = os.path.join(BUILD, "app_layer")          # 应用层（无框架）
 DIST = r"D:\PClonline\dist"
-BASELINE = r"D:\PClonline\baseline"
 SECRETS = r"D:\PClonline\secrets"
 SIGN_TOOL = os.path.join(BUILD, "sign", "PClonlineSign.dll")
 PRIV_KEY = os.path.join(SECRETS, "update_sign_key.pem")
 
-# 发布资产的基础 URL：GitHub Releases 用 latest，这样客户端不用跟着版本号改。
-# 仓库名从 secrets/github_repo 读（一行 owner/name），换号不用改代码。
 GH_REPO_FILE = os.path.join(SECRETS, "github_repo")
 GH_REPO = "Fangshang95/PCL-online"
 if os.path.isfile(GH_REPO_FILE):
@@ -55,11 +59,9 @@ if os.path.isfile(GH_REPO_FILE):
         GH_REPO = _s
 GH_BASE = "https://github.com/%s/releases/latest/download" % GH_REPO
 
-# 更新分发**只走 GitHub**（客户端只有一个清单源）。
-# 自建更新服务器（/v1/update/*）已下线，不再需要 deploy.json / publish_server_update.py。
-
+# 更新分发只走 GitHub（客户端只有一个清单源）
 ENV = dict(os.environ)
-ENV["DOTNET_ROOT"] = r"D:\PClonline\dotnet-sdk"
+ENV["DOTNET_ROOT"] = SDK_DIR
 ENV["NUGET_PACKAGES"] = r"D:\PClonline\nuget-packages"
 
 
@@ -96,122 +98,174 @@ def scan_files(root):
     return out
 
 
-def zip_files(zpath, root, rels):
-    """把 root 下的 rels 打成 zip（deflate/6）。返回 zip 大小。"""
+def zip_files(zpath, roots):
+    """roots: {root: [rel, ...]}，按 root 逐个写入 zip。返回 zip 大小。"""
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for rel in rels:
-            zf.write(os.path.join(root, rel.replace("/", os.sep)), rel)
+        for root, rels in roots.items():
+            for rel in rels:
+                zf.write(os.path.join(root, rel.replace("/", os.sep)), rel)
     return os.path.getsize(zpath)
 
 
-def diff_against(old_idx, entries):
-    """与某个旧版本比对：返回 (变化了的文件, 新版本已删除的文件)。
-
-    只按 sha256 判定——所以只需要旧版本的清单，不需要保留旧版本的完整文件，
-    baseline 目录因此只有几十 KB。
-    """
-    new_idx = {e["path"]: e["sha256"] for e in entries}
-    changed = [e["path"] for e in entries if old_idx.get(e["path"]) != e["sha256"]]
-    removed = sorted(p for p in old_idx if p not in new_idx)
-    return changed, removed
-
-
-def load_baselines(current):
-    """读取历史版本清单，返回 {version: {path: sha256}}（不含当前版本）。"""
-    out = {}
-    if not os.path.isdir(BASELINE):
+def read_frameworks(app_dir):
+    """从应用层的 runtimeconfig.json 读出它要的 framework（name → 最低版本）。"""
+    import glob
+    target = None
+    for cfg in glob.glob(os.path.join(app_dir, "*.runtimeconfig.json")):
+        with open(cfg, encoding="utf-8") as f:
+            doc = json.load(f)
+        ro = doc.get("runtimeOptions") or doc
+        # 命中即停：frameworks（数组）或 framework（单个）任一存在都算找到了声明
+        if ro.get("frameworks") is not None or ro.get("framework") is not None:
+            target = ro
+            break
+    out = []
+    if not target:
         return out
-    for name in sorted(os.listdir(BASELINE)):
-        if not (name.startswith("version-") and name.endswith(".json")):
-            continue
-        ver = name[len("version-"):-len(".json")]
-        if ver == current:
-            continue
-        try:
-            with open(os.path.join(BASELINE, name), encoding="utf-8") as f:
-                m = json.load(f)
-            out[ver] = {e["path"]: e["sha256"] for e in m.get("files", [])}
-        except Exception as e:
-            print("  跳过损坏的基线 %s：%s" % (name, e), flush=True)
+    # frameworks 在新版 SDK 里是 [{"name":...,"version":...}, ...]，老格式是 {"name": {"version":...}}
+    fw = target.get("frameworks")
+    if isinstance(fw, list):
+        for e in fw:
+            if isinstance(e, dict) and e.get("name"):
+                out.append((e["name"], e.get("version") or "0.0.0"))
+    elif isinstance(fw, dict):
+        for name, ver in fw.items():
+            out.append((name, (ver or {}).get("version") or "0.0.0"))
+    if not out and target.get("framework"):
+        out.append((target["framework"].get("name"), target["framework"].get("version") or "0.0.0"))
     return out
 
 
+def pick_runtime_files(fw_list):
+    """在本机 SDK 里为每个 framework 挑一个可用版本，返回 {abs_root: [rel]}
+
+    版本选择沿用 .NET 默认 roll-forward：≥ 声明版本的最高版本（这里取第一个满足的）。
+    根文件固定带 dotnet.exe / hostfxr.dll / hostpolicy.dll —— 移动运行时最小集合。
+    """
+    roots = {}
+
+    def add_tree(root, sub):
+        base = os.path.join(root, sub)
+        if not os.path.isdir(base):
+            return 0
+        n = 0
+        for dirpath, _, files in os.walk(base):
+            for f in files:
+                rel = os.path.relpath(os.path.join(dirpath, f), root).replace("\\", "/")
+                roots.setdefault(root, []).append(rel)
+                n += 1
+        return n
+
+    tops = {}
+    for name, want in fw_list:
+        shared = os.path.join(SDK_DIR, "shared", name)
+        if not os.path.isdir(shared):
+            sys.exit("SDK 里没有运行时 %s（%s 缺失）" % (name, shared))
+        vers = []
+        for v in sorted(os.listdir(shared)):
+            p = os.path.join(shared, v)
+            if os.path.isdir(p):
+                vers.append((tuple(int(x) for x in v.split(".") if x.isdigit()), v))
+        if not vers:
+            sys.exit("SDK 里 %s 没有可用版本" % name)
+        want_t = tuple(int(x) for x in want.split(".") if x.isdigit())
+        pick = None
+        for t, v in vers:
+            if t >= want_t:
+                pick = v
+                break
+        if pick is None:
+            pick = vers[-1][1]
+            print("  警告：%s 声明 %s，SDK 最高只到 %s，将用后者" % (name, want, pick))
+        n = add_tree(SDK_DIR, "shared/%s/%s" % (name, pick))
+        tops[name] = pick
+        print("  运行时 %s → shared/%s/%s（%d 个文件）" % (name, name, pick, n))
+
+    # 移动运行时的根文件：dotnet.exe + 与 shared 版本对齐的 host\fxr\<ver>\
+    if not os.path.isfile(os.path.join(SDK_DIR, "dotnet.exe")):
+        sys.exit("SDK 缺少 dotnet.exe")
+    roots.setdefault(SDK_DIR, []).append("dotnet.exe")
+    host_ver = max(tops.values()) if tops else ""
+    host_dir = os.path.join(SDK_DIR, "host", "fxr", host_ver)
+    if not os.path.isdir(host_dir):
+        sys.exit("SDK 缺少 host\\fxr\\%s（hostfxr 版本与运行时不一致）" % host_ver)
+    n = add_tree(SDK_DIR, "host/fxr/%s" % host_ver)
+    print("  hostfxr → host/fxr/%s（%d 个文件）" % (host_ver, n))
+    return roots
+
+
 def main():
-    version = sys.argv[1] if len(sys.argv) > 1 else "v50.10.0"
-    reuse = "--reuse-app" in sys.argv
-    want_patch = "--no-patch" not in sys.argv
+    version = sys.argv[1] if len(sys.argv) > 1 else "v50.11.0"
     today = datetime.date.today().strftime("%Y%m%d")
     print("=== 打包 %s ===" % version, flush=True)
 
-    if reuse and os.path.isdir(APP_DIR):
-        print("复用已发布的应用层：" + APP_DIR, flush=True)
-    else:
-        # 1. 发布应用层（自包含 + 非单文件，运行时随全量包到位、逐文件可增量更新）
-        run('"%s" publish "%s" -c Release -p:Platform=x64 -p:SelfContained=true '
-            '-p:PublishSingleFile=false -o "%s" --nologo -v q' % (DOTNET, PROJ, APP_DIR),
-            os.path.join(BUILD, "publish_app.log"))
+    # 1. 发布应用层（无框架：运行时不随包走，交给 runtime\ 或玩家系统）
+    print("--- 发布应用层（无框架）---", flush=True)
+    run('"%s" publish "%s" -c Release -p:Platform=x64 -p:SelfContained=false '
+        '-p:PublishSingleFile=false -o "%s" --nologo -v q' % (DOTNET, PROJ, APP_DIR),
+        os.path.join(BUILD, "publish_app.log"))
 
-    # 2. 文件级 sha256 清单
     entries = scan_files(APP_DIR)
     total = sum(e["size"] for e in entries)
-    print("清单：%d 个文件，共 %.1f MB" % (len(entries), total / 1048576), flush=True)
-    new_idx = {e["path"]: e["sha256"] for e in entries}
+    print("应用层：%d 个文件，共 %.1f MB" % (len(entries), total / 1048576), flush=True)
+
+    # 2. 组装运行时包（net.zip）
+    print("--- 组装运行时 ---", flush=True)
+    fw_list = read_frameworks(APP_DIR)
+    if not fw_list:
+        sys.exit("应用层 runtimeconfig 里没声明 framework，无法组装运行时包")
+    print("  声明的框架：%s" % ", ".join("%s %s" % (n, v) for n, v in fw_list), flush=True)
+    rt_roots = pick_runtime_files(fw_list)
+    rt_rels = sorted({r for rels in rt_roots.values() for r in rels})
+    rt_entries = []
+    for root, rels in rt_roots.items():
+        for rel in rels:
+            full = os.path.join(root, rel.replace("/", os.sep))
+            rt_entries.append({"path": rel, "size": os.path.getsize(full),
+                               "sha256": sha256_of(full)})
+    rt_entries.sort(key=lambda e: e["path"])
+    print("运行时：%d 个文件，共 %.1f MB" % (len(rt_entries),
+                                       sum(e["size"] for e in rt_entries) / 1048576), flush=True)
 
     out_dir = os.path.join(DIST, version)
     upd_dir = os.path.join(out_dir, "update")
     os.makedirs(upd_dir, exist_ok=True)
 
-    # 3a. 先写一份"仅文件清单"的 version.json 内嵌进 exe：
-    #     自展开后 app\version.json 必须存在，客户端才认得出本地版本、才选得到增量包
-    mpath = os.path.join(APP_DIR, "version.json")
-    with open(mpath, "w", encoding="utf-8") as f:
-        json.dump({"version": version,
-                   "generated": datetime.datetime.now().isoformat(timespec="seconds"),
-                   "files": entries}, f, ensure_ascii=False, indent=1)
+    # 3. 两个包
+    all_rels = [e["path"] for e in entries]
+    # 3a. 内嵌进 exe 的那份（带清单，自展开后 app\ 里就有版本标记）
     embed_zip = os.path.join(BUILD, "app.zip")
-    zip_files(embed_zip, APP_DIR, [e["path"] for e in entries] + ["version.json"])
-
-    # 3b. 全量包（对外发布用；不含清单自身，落地后由客户端写版本）
+    zip_files(embed_zip, {APP_DIR: all_rels + ["version.json"]})
+    # 3b. 对外发布的全量应用层
     full_zip = os.path.join(upd_dir, "app.zip")
-    full_size = zip_files(full_zip, APP_DIR, [e["path"] for e in entries])
-    print("全量包：%.1f MB" % (full_size / 1048576), flush=True)
+    full_size = zip_files(full_zip, {APP_DIR: all_rels})
+    # 3c. 运行时包
+    net_zip = os.path.join(upd_dir, "net.zip")
+    net_size = zip_files(net_zip, rt_roots)
+    print("app.zip：%.1f MB（无框架应用层）" % (full_size / 1048576), flush=True)
+    print("net.zip ：%.1f MB（.NET 运行时）" % (net_size / 1048576), flush=True)
 
-    # 包地址一律写相对文件名：同一份清单放到 GitHub Releases 或自建服务器都成立，
-    # 客户端按"清单取自哪个地址"解析成绝对 URL；服务器因此可以原样返回文件，不破坏签名
+    # 包地址一律写相对文件名：客户端按"清单取自哪个地址"拼绝对 URL，
+    # 清单字节原样返回才不会破坏 ECDSA 签名
     packages = [{
         "type": "full", "from": "",
         "url": "app.zip",
         "size": full_size, "sha256": sha256_of(full_zip),
     }]
+    runtime_block = {
+        "url": "net.zip",
+        "size": net_size,
+        "sha256": sha256_of(net_zip),
+        "count": len(rt_entries),
+        "files": rt_entries[:200],   # 完整性抽样校验用，全量清单反而没必要下
+    }
 
-    # 4. 为每个历史版本生成"只含变化文件"的增量包
-    old_versions = load_baselines(version)
-    if want_patch and old_versions:
-        for oldver, old_idx in sorted(old_versions.items()):
-            changed, removed = diff_against(old_idx, entries)
-            if not changed and not removed:
-                print("  %s → %s：无变化，跳过" % (oldver, version), flush=True)
-                continue
-            pname = "patch-%s-to-%s.zip" % (oldver, version)
-            ppath = os.path.join(upd_dir, pname)
-            psize = zip_files(ppath, APP_DIR, changed)
-            packages.append({
-                "type": "patch", "from": oldver,
-                "url": pname,
-                "size": psize, "sha256": sha256_of(ppath),
-                "remove": removed,
-            })
-            print("  %s → %s：变化 %d 个 / 删除 %d 个，增量包 %.1f MB（省 %.0f%%）"
-                  % (oldver, version, len(changed), len(removed), psize / 1048576,
-                     (1 - psize / full_size) * 100), flush=True)
-    else:
-        print("未生成增量包（无历史基线或已禁用）", flush=True)
-
-    # 5. version.json + 签名
+    # 4. version.json + 签名
     manifest = {
         "version": version,
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         "files": entries,
+        "runtime": runtime_block,
         "packages": packages,
     }
     mpath = os.path.join(APP_DIR, "version.json")
@@ -234,12 +288,7 @@ def main():
     else:
         print("警告：缺少私钥或签名工具，未签名（客户端会按未签名处理）", flush=True)
 
-    # 保存基线，供下次生成增量包
-    os.makedirs(BASELINE, exist_ok=True)
-    with open(os.path.join(BASELINE, "version-%s.json" % version), "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=1)
-
-    # 6. 内嵌 app.zip 到引导器并发布
+    # 5. 内嵌 app.zip 到引导器并发布
     boot_zip = os.path.join(BOOT_DIR, "app.zip")
     with open(boot_zip, "wb") as f:
         f.write(open(embed_zip, "rb").read())
@@ -258,18 +307,14 @@ def main():
     print("sha256：%s" % sha256_of(out), flush=True)
     print("发布资产：%s" % upd_dir, flush=True)
 
-    # 7. 上传清单，方便手工拖到 GitHub Release / 传到服务器
+    # 6. 上传清单（资产名必须 ASCII，否则 GitHub 会 422 / 改写成 default.txt）
     lines = [
         "发布资产（全部传到 GitHub Release 的 latest，更新只认这一个源）：",
         "",
-        "  version.json",
-        "  version.json.sig",
-        "  app.zip            %.1f MB（全量兜底，无框架版）" % (full_size / 1048576),
-    ]
-    for p in packages:
-        if p["type"] == "patch":
-            lines.append("  patch-%s-to-%s.zip  %.1f MB（增量）" % (p["from"], version, p["size"] / 1048576))
-    lines += [
+        "  version.json      清单（ECDSA 签名）",
+        "  version.json.sig  签名",
+        "  app.zip            %.1f MB（无框架应用层，每次更新全量覆盖）" % (full_size / 1048576),
+        "  net.zip            %.1f MB（.NET 运行时，装一次就再也不用下）" % (net_size / 1048576),
         "",
         "清单里的包地址是相对文件名，客户端按清单来源自动拼成绝对地址：",
         "  GitHub  → " + GH_BASE + "/app.zip",
@@ -281,9 +326,9 @@ def main():
         "  · 这些资产必须都在同一个 latest Release 里（latest/download 前缀要求）",
         "  · version.json 与 version.json.sig 必须成对更新（签名针对文件原始字节，",
         "    Release 会原样返回，任何改动都会导致验签失败）",
-        "  · app.zip 自包含（自带 .NET 运行时），所以玩家首次下载即可用，不需要另装运行库",
+        "  · app.zip 无框架（不含运行时），运行时由 net.zip 装到 runtime\\ 目录，",
+        "    更新时只覆盖 app\\，runtime\\ 永远不动",
     ]
-    # 资产名必须是 ASCII，否则 GitHub Release 会 422 或改名成 default.txt
     with open(os.path.join(upd_dir, "upload-notes.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
