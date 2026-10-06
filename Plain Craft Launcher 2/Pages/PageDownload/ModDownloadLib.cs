@@ -1663,10 +1663,17 @@ public static class ModDownloadLib
             var forge = (ModDownload.DlForgeVersionEntry)info;
             var legacyFileName =
                 $"{forge.Inherit}-{forge.FileVersion}/forge-{forge.Inherit}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}";
-            // 同 2067 行：交给 PCL 的源选择器排序，末尾补官方兜底
+            // 同新版路径：original 必须带完整 net/minecraftforge/forge/ 前缀，
+            // 否则 DlSourceLibraryGet 替换后会丢掉该段导致 404；
+            // 顺序同样是 官方 maven → bmclapi2 镜像 → files. CDN 兜底
+            var legacyOfficialUrl =
+                $"https://maven.minecraftforge.net/net/minecraftforge/forge/{legacyFileName}";
             files.Add(new DownloadFile(
-                ModDownload.DlSourceLibraryGet($"https://maven.minecraftforge.net/{legacyFileName}")
-                    .Append($"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{legacyFileName}"),
+                new[] { legacyOfficialUrl }
+                    .Concat(ModDownload.DlSourceLibraryGet(legacyOfficialUrl)
+                        .Where(u => !u.Contains("maven.minecraftforge.net")))
+                    .Append(
+                        $"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{legacyFileName}"),
                 target, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
             }
 
@@ -2059,13 +2066,23 @@ public static class ModDownloadLib
                 var fileName =
                     $"{forge.Inherit.Replace("-", "_")}-{forge.FileVersion}/forge-{forge.Inherit.Replace("-", "_")}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}";
                 // 源列表走 PCL 自己的源选择器（与 ModLibrary/ModAssets 同一条路径），
-                // 不要再写死两个 URL：写死会绕过用户的下载源设置，且只剩
-                // bmclapi2 /maven + files.minecraftforge.net 两条，
-                // 前者 302 跳 open-bmcl-api.lunar.cc（本 fork 的 DoH 层解析不了）、
-                // 后者在国内极慢，于是 Forge installer 成了整包安装里唯一的瓶颈。
-                // 末尾补官方源兜底：bmclapi2 两条路径都挂时至少还有一条能走。
+                // 不要再写死两个 URL：写死会绕过用户的下载源设置。
+                //
+                // 注意 original 必须是**完整的官方 maven 路径**：
+                // DlSourceLibraryGet 是按 host 前缀做 Replace 的，只给它
+                // "https://maven.minecraftforge.net/{fileName}" 会替换成
+                // bmclapi2/maven/1.20.1-47.4.10/… —— 少了 net/minecraftforge/forge/
+                // 一段，实测直接 404。所以这里要把 forge 目录补全再交给它。
+                var officialForgeUrl =
+                    $"https://maven.minecraftforge.net/net/minecraftforge/forge/{fileName}";
                 files.Add(new DownloadFile(
-                    ModDownload.DlSourceLibraryGet($"https://maven.minecraftforge.net/{fileName}")
+                    // 顺序：官方 maven 优先（实测握手 ~1s）→ bmclapi2 两条镜像（跟随用户的
+                    // 下载源设置）→ files. CDN 最后兜底（实测握手 ~8s，Cloudflare 绕路）。
+                    // DlSourceLibraryGet 对 forge 只返回 bmclapi2 /maven 与 /libraries、
+                    // **不含 original**，所以官方源要自己补在最前面。
+                    new[] { officialForgeUrl }
+                        .Concat(ModDownload.DlSourceLibraryGet(officialForgeUrl)
+                            .Where(u => !u.Contains("maven.minecraftforge.net")))
                         .Append($"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{fileName}"),
                     installerAddress, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
             }
