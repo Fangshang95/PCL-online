@@ -26,110 +26,139 @@ internal static class RuntimeInstaller
     private const int ProbeCount = 5;
 
     /// <summary>
-    /// 确保运行时齐备。返回应当传给应用的 DOTNET_ROOT（本地 runtime\ 或系统安装目录）；
-    /// 返回 null 表示系统里已有（无需指定）；缺了且装不上时返回空串（由调用方提示玩家）。
+    /// 确保运行时齐备（v50.11.6 定稿：CE 式——装到系统，一次 UAC，全局免疫）。
+    ///
+    /// Windows apphost 只认三个运行时位置：DOTNET_ROOT 环境变量（提权会丢，已废弃）、
+    /// 注册表 InstallLocation（要管理员）、%ProgramFiles%\dotnet（要管理员）。
+    /// 免管理员的 %LOCALAPPDATA%\dotnet 实测**不在**查找路径（v50.11.6 用窗口枚举证实：
+    /// 主程序弹着缺 .NET 的 MessageBox 挂起）。所以 CE 的正解 = 把运行时装进系统：
+    ///   0. 应用层自包含（v50.10.x 老安装）→ 运行时在包里，放行
+    ///   1. 系统已装（%ProgramFiles%\dotnet 等）→ 直接用
+    ///   2. 包内 net.zip → 申请管理员权限自我提权安装（只此一次 UAC），装完玩家再双击
+    ///   3. 清单 net.zip → 联网下载后同样提权安装
+    ///   4. 都没有 → 返回空串，引导器弹窗说明
+    ///
+    /// 返回值：null = 就绪（apphost 自行解析，无需环境变量）；"" = 缺失需提示；
+    ///         "ELEVATING" = 已发起提权安装，引导器应静默退出（装完玩家再双击）。
     /// </summary>
-    public static async Task<string?> EnsureAsync(string appDir, string runtimeDir,
+    public static async Task<string?> EnsureAsync(string appDir, string legacyRuntimeDir,
                                                   UpdateManifest? manifest, Action<string> log)
     {
-        var runtime = manifest?.Runtime;
-        // 清单来源：net.zip 在清单里写的是相对文件名，要按"清单取自哪个地址"拼绝对 URL
-        var sourceUrl = manifest?.SourceUrl;
-        if (string.IsNullOrWhiteSpace(sourceUrl)) sourceUrl = null;
-
-        // 0) 应用层是自包含版（v50.10.x 的老安装，runtimeconfig 用 includedFrameworks 声明）：
-        //    运行时已经打在包里，既不需要 runtime\ 也不该弹"缺运行库"的框——
-        //    老用户换新引导器后 app\ 还是旧版时，就是这种情况
+        // 0) 自包含应用层：运行时在包里
         if (IsSelfContained(appDir))
         {
             log("应用层自带运行时（自包含版），无需安装运行库");
             return null;
         }
 
-        // 1) 本地 runtime\ 还在且完整 —— 更新永远走不到这里，这是常态
-        if (IsComplete(runtimeDir, runtime, log))
-        {
-            log("运行时已就位：" + runtimeDir);
-            return runtimeDir;
-        }
-
-        var baseDir = Directory.GetParent(runtimeDir)?.FullName ?? "";
-        var stamp = Path.Combine(runtimeDir, ".installed");
-
-        // 1b) 离线快速通道：清单拉不到时 IsComplete 没有校验基准，
-        //     靠安装时写的 .installed 指纹（net.zip 大小+修改时间）判定"装过且包没变"，
-        //     否则离线玩家每次启动都要重解压一遍 171MB
-        var localZip = string.IsNullOrEmpty(baseDir) ? null : FindLocalRuntimeZip(baseDir, appDir);
-        if (runtime is null && localZip is not null && File.Exists(stamp))
-        {
-            try
-            {
-                if (File.ReadAllText(stamp).Trim() == ZipFingerprint(localZip))
-                {
-                    log("运行时已就位（离线）：" + runtimeDir);
-                    return runtimeDir;
-                }
-            }
-            catch { /* 标记坏了就当没装过 */ }
-        }
-
-        // 2) 已解压的运行时目录：有人会把 net.zip 解开用，直接认，不用再装一遍
-        var extracted = string.IsNullOrEmpty(baseDir) ? null : FindExtractedRuntime(baseDir);
-        if (extracted is not null)
-        {
-            log("使用解压好的运行时目录：" + extracted);
-            return extracted;
-        }
-
-        // 3) 本地 net.zip（离线包形态）。必须放在"读清单"之前——
-        //    离线场景清单本来就拉不到，不能因为它就装不了运行时
-        if (localZip is not null
-            && (runtime is null || string.IsNullOrWhiteSpace(runtime.Sha256)
-                || string.Equals(UpdateService.Sha256Of(localZip), runtime.Sha256, StringComparison.OrdinalIgnoreCase)))
-        {
-            log("使用离线运行时包：" + localZip);
-            try
-            {
-                Extract(localZip, runtimeDir, log);
-                try { File.WriteAllText(stamp, ZipFingerprint(localZip)); } catch { }
-                log("运行时安装完成：" + runtimeDir);
-                return runtimeDir;
-            }
-            catch (Exception ex)
-            {
-                log("离线运行时包解压失败：" + ex.Message + "，改走下载");
-            }
-        }
-        else if (localZip is not null)
-        {
-            // 找到了包但 sha256 与清单不符，或解压失败 —— 别静默跳过，明说
-            log("旁边的 net.zip 与清单不符或无法解压（多半是下载/解压不完整），将尝试联网下载；"
-                + "建议重新获取 net.zip");
-        }
-
-        // 3) 从清单给的 net.zip 装一份移动运行时
-        if (runtime is not null && !string.IsNullOrWhiteSpace(runtime.Url))
-        {
-            log("正在安装运行时：" + runtime.Url);
-            var url = UpdateService.ResolveUrl(sourceUrl, runtime.Url);
-            if (await TryInstallPackageAsync(url, runtimeDir, runtime, log)) return runtimeDir;
-        }
-
-        // 4) 兜底：玩家机器上已经装了能用的运行时，就别再拖一份几十 MB 下来
+        // 1) 系统里已装能用的运行时 → 直接放行（apphost 自己找得到，无需环境变量）
         var systemRoot = FindSystemRuntime(appDir, log);
         if (systemRoot is not null)
         {
             log("使用系统运行时：" + systemRoot);
-            return systemRoot;
+            return null;
         }
+
+        var baseDir = Directory.GetParent(legacyRuntimeDir)?.FullName ?? "";
+        var localZip = string.IsNullOrEmpty(baseDir) ? null : FindLocalRuntimeZip(baseDir, appDir);
+
+        // 2) 包内 net.zip（离线包形态）→ 申请提权安装到系统
+        if (localZip is not null
+            && (manifest?.Runtime is null || string.IsNullOrWhiteSpace(manifest.Runtime.Sha256)
+                || string.Equals(UpdateService.Sha256Of(localZip), manifest.Runtime.Sha256,
+                                 StringComparison.OrdinalIgnoreCase)))
+        {
+            return RequestElevation(localZip, baseDir, log);
+        }
+        if (localZip is not null)
+        {
+            log("包内 net.zip 与清单不符或无法解压（多半是拷贝不完整），将尝试联网下载；"
+                + "建议重新获取 net.zip");
+        }
+
+        // 3) 清单 net.zip → 下载到临时目录后提权安装
+        var runtime = manifest?.Runtime;
+        if (runtime is not null && !string.IsNullOrWhiteSpace(runtime.Url))
+        {
+            log("正在下载运行时：" + runtime.Url);
+            var url = UpdateService.ResolveUrl(manifest?.SourceUrl, runtime.Url);
+            var tmp = Path.Combine(Path.GetTempPath(), "pclonline-net.zip");
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                await UpdateService.DownloadAsync(url, tmp, log, cts.Token);
+                var fi = new FileInfo(tmp);
+                if (fi.Exists && fi.Length == runtime.Size
+                    && (string.IsNullOrWhiteSpace(runtime.Sha256)
+                        || string.Equals(UpdateService.Sha256Of(tmp), runtime.Sha256,
+                                         StringComparison.OrdinalIgnoreCase)))
+                {
+                    return RequestElevation(tmp, baseDir, log);
+                }
+                log("下载的运行时包校验不符，放弃");
+            }
+            catch (OperationCanceledException)
+            {
+                log("下载运行时包超时（2 分钟）");
+            }
+            catch (Exception ex)
+            {
+                log("下载运行时包失败：" + ex.Message);
+            }
+            finally { try { File.Delete(tmp); } catch { } }
+        }
+
         return "";
     }
 
-    /// <summary>离线安装标记：net.zip 的大小 + 修改时间指纹。包没换过 = runtime\ 不用重装。</summary>
-    private static string ZipFingerprint(string zipPath)
+    /// <summary>申请管理员权限安装 net.zip 到 %ProgramFiles%\dotnet。返回 "ELEVATING"（或失败时 ""）。</summary>
+    public static string RequestElevation(string zipPath, string baseDir, Action<string> log)
     {
-        var fi = new FileInfo(zipPath);
-        return fi.Length + ":" + fi.LastWriteTimeUtc.Ticks;
+        log("系统缺少 .NET 运行时，正在请求管理员权限安装（只需这一次，以后永远直接启动）…");
+        try
+        {
+            var self = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(self)) return "";
+            log("即将弹出系统授权（UAC），同意后自动安装；装完重新双击启动器即可");
+            var psi = new System.Diagnostics.ProcessStartInfo(self)
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = baseDir,
+            };
+            psi.ArgumentList.Add("--pcl-install-runtime");
+            psi.ArgumentList.Add(zipPath);
+            // 注意：Verb=runas 的 ShellExecuteEx 会同步阻塞到玩家点完 UAC（是/否），
+            // 这句"已弹出"日志提前写，玩家看到 UAC 时引导器日志里已有说明
+            System.Diagnostics.Process.Start(psi);
+            log("UAC 已处理，提权安装程序已启动");
+            return "ELEVATING";
+        }
+        catch (Exception ex)
+        {
+            log("申请管理员权限失败（玩家可能点了否）：" + ex.Message);
+            return "";
+        }
+    }
+
+    /// <summary>提权模式入口：把 net.zip 解压安装到 %ProgramFiles%\dotnet（apphost 默认查找位置）。</summary>
+    public static int InstallToProgramFiles(string zipPath, Action<string> log)
+    {
+        try
+        {
+            var target = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet");
+            log("安装 .NET 运行时到 " + target);
+            Directory.CreateDirectory(target);
+            Extract(zipPath, target, log);
+            log("安装完成");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            log("安装失败：" + ex.Message);
+            return 1;
+        }
     }
 
     /// <summary>
@@ -159,53 +188,7 @@ internal static class RuntimeInstaller
 
     private const string AppDirNameMarker = "app";
 
-    /// <summary>
-    /// 找"已解压的运行时目录"：有人会把 net.zip 解开，得到 dotnet.exe + host\fxr + shared\...。
-    /// 这种目录直接当 DOTNET_ROOT 用，不用再装一遍。只看启动器同级的一层子目录。
-    /// </summary>
-    public static string? FindExtractedRuntime(string baseDir)
-    {
-        try
-        {
-            foreach (var d in Directory.EnumerateDirectories(baseDir))
-            {
-                var name = Path.GetFileName(d);
-                if (name is "app" or "runtime" or "PCL") continue;
-                if (File.Exists(Path.Combine(d, "dotnet.exe"))
-                    && Directory.Exists(Path.Combine(d, "host", "fxr"))
-                    && Directory.Exists(Path.Combine(d, "shared", "Microsoft.WindowsDesktop.App")))
-                {
-                    return d;
-                }
-            }
-        }
-        catch { /* 同上 */ }
-        return null;
-    }
 
-    /// <summary>系统里有没有 .NET 10 桌面运行时（粗查常见安装位置；升级可行性判断用）。</summary>
-    public static bool SystemHasNet10()
-    {
-        foreach (var root in new[]
-                 {
-                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet"),
-                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "dotnet"),
-                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dotnet"),
-                 })
-        {
-            try
-            {
-                var wd = Path.Combine(root, "shared", "Microsoft.WindowsDesktop.App");
-                if (!Directory.Exists(wd)) continue;
-                foreach (var v in Directory.EnumerateDirectories(wd))
-                {
-                    if (Path.GetFileName(v).StartsWith("10.", StringComparison.Ordinal)) return true;
-                }
-            }
-            catch { }
-        }
-        return false;
-    }
 
     /// <summary>
     /// "把应用层换成新版（无框架）之后还跑得起来吗？"——换 exe 升级前的保护性判断：
@@ -213,9 +196,10 @@ internal static class RuntimeInstaller
     /// </summary>
     public static bool NewAppCanRun(string baseDir, string appDir)
     {
-        return FindLocalRuntimeZip(baseDir, appDir) is not null
-               || FindExtractedRuntime(baseDir) is not null
-               || SystemHasNet10();
+        // 自包含判断在 Program 侧（EmbeddedIsSelfContained）先行处理；
+        // 这里是无框架应用层的可运行性：有 net.zip 可装、或系统已装即可
+        return FindLocalRuntimeZip(baseDir, appDir) is not null      // 包内 net.zip 可装
+               || FindSystemRuntime(appDir, static _ => { }) is not null;  // 系统已装
     }
 
     /// <summary>粗检一个 zip 是不是像样的运行时包：能打开、里面有 dotnet.exe。</summary>
@@ -249,104 +233,7 @@ internal static class RuntimeInstaller
         return false;
     }
 
-    /// <summary>抽样校验 runtime\ 是否完整（文件数 + 前几个文件的 sha256）。</summary>
-    private static bool IsComplete(string dir, ManifestRuntime? spec, Action<string> log)
-    {
-        if (spec is null || spec.Count <= 0) return false;
-        if (!Directory.Exists(dir)) return false;
-        var probe = spec.Files.Take(ProbeCount).ToList();
-        if (probe.Count == 0) return false;
 
-        var missing = probe.Count(p => !File.Exists(Path.Combine(dir, p.Path.Replace('/', Path.DirectorySeparatorChar))));
-        if (missing > 0)
-        {
-            log("runtime\\ 缺 " + missing + " 个样本文件，判定不完整");
-            return false;
-        }
-        foreach (var f in probe)
-        {
-            var full = Path.Combine(dir, f.Path.Replace('/', Path.DirectorySeparatorChar));
-            if (!string.Equals(UpdateService.Sha256Of(full), f.Sha256, StringComparison.OrdinalIgnoreCase))
-            {
-                log("runtime\\ 内容已变（" + f.Path + "），重新装运行时");
-                return false;
-            }
-        }
-        var onDisk = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Count();
-        if (onDisk < spec.Count * 0.9)
-        {
-            log($"runtime\\ 只有 {onDisk}/{spec.Count} 个文件，判定不完整");
-            return false;
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// 从清单地址下 net.zip 并解压到 runtime\；解压后按清单复核关键文件。
-    ///
-    /// 每步都必须有日志：这一路是「首次启动 + 走代理/弱网」最容易出事的地方，
-    /// 卡住时玩家只看得见静默转圈，所以下载开始/结束/大小/校验/解压每一步都要留痕。
-    /// 另有 10 分钟硬超时——代理或网络假装连通却不给数据（502 后挂死）时，
-    /// 宁可失败去走系统运行时兜底，也别把玩家吊住一小时。
-    /// </summary>
-    private static async Task<bool> TryInstallPackageAsync(string url, string dir, ManifestRuntime spec,
-                                                           Action<string> log)
-    {
-        var zip = Path.Combine(Path.GetTempPath(), "pclonline-net.zip");
-        try
-        {
-            if (File.Exists(zip) && spec.Size > 0 && new FileInfo(zip).Length == spec.Size)
-            {
-                // 上次下完就中断了：大小正好，直接接着解压，别再拖一遍
-                log("复用已下载的运行时包（" + (spec.Size / 1048576) + " MB）");
-            }
-            else
-            {
-                log("下载运行时包：" + url);
-                // 2 分钟够了（70MB 正常网速几十秒）。再等下去没有意义：
-                // 卡住的玩家只会看到"双击没反应"，不如早退给系统运行时 / 明确提示
-                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                try
-                {
-                    await UpdateService.DownloadAsync(url, zip, log, cts.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    log("下载运行时包超时（2 分钟），改用系统运行时；"
-                        + "若系统里也没有，请把离线包里的 net.zip 放到启动器同级目录再双击");
-                    return false;
-                }
-                var got = new FileInfo(zip);
-                if (!got.Exists || got.Length != spec.Size)
-                {
-                    log($"运行时包大小不符（实际 {(got.Exists ? got.Length : 0)} 字节，期望 {spec.Size}）");
-                    return false;
-                }
-                if (!string.IsNullOrWhiteSpace(spec.Sha256)
-                    && !string.Equals(UpdateService.Sha256Of(zip), spec.Sha256, StringComparison.OrdinalIgnoreCase))
-                {
-                    log("运行时包校验失败（sha256 不符），丢弃");
-                    return false;
-                }
-                log("运行时包校验通过：" + (spec.Size / 1048576) + " MB");
-            }
-
-            log("解压运行时到 runtime\\…");
-            Extract(zip, dir, log);
-        }
-        catch (Exception ex)
-        {
-            log("运行时安装失败：" + ex.Message);
-            return false;
-        }
-        finally
-        {
-            try { File.Delete(zip); } catch { /* 临时文件删不掉无所谓 */ }
-        }
-        if (!IsComplete(dir, spec, log)) { log("运行时解压后校验不通过"); return false; }
-        log("运行时安装完成：" + dir);
-        return true;
-    }
 
     /// <summary>系统 / 用户级 dotnet 里挑一个满足应用层声明的目录；挑不到返回 null。</summary>
     private static string? FindSystemRuntime(string preferDir, Action<string> log)
@@ -397,7 +284,9 @@ internal static class RuntimeInstaller
 
         Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet"));
         Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "dotnet"));
-        Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dotnet"));
+        // 注意：%LOCALAPPDATA%\dotnet 虽被 dotnet-install 脚本使用，但 .NET apphost
+        // **不会**自动扫描它（v50.11.6 用窗口枚举实证：主程序弹缺 .NET 框挂起）。
+        // 放进这里只会造成"引导器误判已装、主程序弹框"的假象，故不列入。
         return list.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 

@@ -51,6 +51,28 @@ internal static class Program
         Log("========== 引导器启动 ==========");
         Log("目录：" + baseDir);
 
+        // 提权安装模式：runas 带 --pcl-install-runtime <net.zip路径> 进来，
+        // 把运行时装进 %ProgramFiles%\dotnet（apphost 默认查找位置，全局免疫），装完即退
+        var installIdx = Array.IndexOf(args, "--pcl-install-runtime");
+        if (installIdx >= 0)
+        {
+            var zip = installIdx + 1 < args.Length ? args[installIdx + 1]
+                     : Path.Combine(baseDir, "net.zip");
+            if (!File.Exists(zip))
+            {
+                MessageBoxW(IntPtr.Zero, "找不到运行时安装包 net.zip，请把它放到启动器同级目录。",
+                            "PClonline 运行时安装", (uint)0x10);
+                return 5;
+            }
+            var code = RuntimeInstaller.InstallToProgramFiles(zip, Log);
+            MessageBoxW(IntPtr.Zero,
+                code == 0
+                    ? ".NET 运行时安装完成！\n\n请重新双击 PClonine.exe 启动启动器（以后永远直接启动，不会再弹这个）。"
+                    : "运行时安装失败，请手动安装 .NET 10 Desktop Runtime：\nhttps://dotnet.microsoft.com/download/dotnet/10.0",
+                "PClonline 运行时安装", (uint)(code == 0 ? 0x40 : 0x10));
+            return code == 0 ? 0 : 6;
+        }
+
         try
         {
             var appDir = Path.Combine(baseDir, AppDirName);
@@ -127,17 +149,26 @@ internal static class Program
                     return 2;
                 }
 
-                // 应用层是无框架版：运行时装在与 app\ 平级的 runtime\ 里（装一次就再不动），
-                // 装不上就借系统里已有的；实在没有才提示玩家手动装
+                // 应用层是无框架版：运行时装到 %LOCALAPPDATA%\dotnet（v50.11.6 起，CE 式方案）。
+                // apphost 会自己扫这个标准位置，所以**不需要也不应该**传 DOTNET_ROOT——
+                // UAC 提权的新进程不继承环境变量，传了反而埋雷（v50.11.4 主程序
+                // 0xC0000417 弹英文缺 .NET 就是这么来的）。
+                // runtimeDir 实参仅用于识别并迁移老的 runtime\ 外挂安装。
                 var runtimeRoot = await RuntimeInstaller.EnsureAsync(appDir, runtimeDir, manifest, Log);
+                if (runtimeRoot == "ELEVATING")
+                {
+                    // 已弹出 UAC 申请安装运行时——这里安静退出，装完玩家再双击即可。
+                    // 别再弹中文框（UAC 本身就是说明，叠弹窗只会让玩家困惑）
+                    return 3;
+                }
                 if (runtimeRoot == "")
                 {
                     // 没有运行时还硬拉起无框架程序 = 玩家看到的就是"闪一下就没了"。
                     // 这里停下来把话说清楚，比让他反复双击强
                     MessageBoxW(IntPtr.Zero,
-                        "启动器需要 .NET 运行时，自动下载失败，你的电脑上也没装。\n\n" +
+                        "启动器需要 .NET 运行时，自动安装失败，你的电脑上也没装。\n\n" +
                         "解决办法（任选一个）：\n" +
-                        "① 把离线包里的 net.zip 放到启动器同级目录，重新双击（推荐，不用联网）\n" +
+                        "① 把包里的 net.zip 放到启动器同级目录，重新双击（推荐，不用联网，会自动装到系统用户目录）\n" +
                         "② 手动安装 .NET 10 Desktop Runtime：\n" +
                         "https://dotnet.microsoft.com/download/dotnet/10.0\n\n" +
                         "装好以后再双击就能直接启动了。",
@@ -152,12 +183,6 @@ internal static class Program
                 // PCL_DATA_DIR：PCL.Core.Basics.ExecutableDirectory 会优先采用它；
                 // 工作目录设为 baseDir，让 mcstudio 配置的旧位置兜底也能命中。
                 psi.Environment["PCL_DATA_DIR"] = baseDir;
-                if (!string.IsNullOrEmpty(runtimeRoot))
-                {
-                    // 运行时装在了用户目录（无需管理员权限），拉起应用时指过去
-                    psi.Environment["DOTNET_ROOT"] = runtimeRoot;
-                    Log("运行时目录：" + runtimeRoot);
-                }
                 Log("数据目录：" + baseDir + "（工作目录同此）");
                 foreach (var a in args) psi.ArgumentList.Add(a);
                 using var proc = Process.Start(psi);
