@@ -1659,14 +1659,15 @@ public static class ModDownloadLib
             }
             else
             {
-                // Forge
-                var forge = (ModDownload.DlForgeVersionEntry)info;
-                files.Add(new DownloadFile(
-                    new[]
-                    {
-                        $"https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/{forge.Inherit}-{forge.FileVersion}/forge-{forge.Inherit}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}",
-                        $"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{forge.Inherit}-{forge.FileVersion}/forge-{forge.Inherit}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}"
-                    }, target, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
+            // Forge
+            var forge = (ModDownload.DlForgeVersionEntry)info;
+            var legacyFileName =
+                $"{forge.Inherit}-{forge.FileVersion}/forge-{forge.Inherit}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}";
+            // 同 2067 行：交给 PCL 的源选择器排序，末尾补官方兜底
+            files.Add(new DownloadFile(
+                ModDownload.DlSourceLibraryGet($"https://maven.minecraftforge.net/{legacyFileName}")
+                    .Append($"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{legacyFileName}"),
+                target, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
             }
 
             // 构造加载器
@@ -1981,7 +1982,15 @@ public static class ModDownloadLib
 
         string loaderName = ModBase.GetStringFromEnum(forgeType);
         var isCustomFolder = (mcFolder ?? "") != (ModFolder.mcFolderSelected ?? "");
-        var installerAddress = ModMain.RequestTaskTempFolder() + "forge_installer.jar";
+        // Forge installer 有 6MB+，而 RequestTaskTempFolder() 是**一次性目录**
+        // （任务结束即被 TryClearTaskTemp 清掉），于是每装一次包都要重下 6MB；
+        // 碰上镜像超时更是把已下的进度全清掉（FileDownloader 关了续传）。
+        // 改存 pathTemp\Cache（与原版 PCL 的缓存语义一致）：跨任务复用，
+        // 且下面的 FileChecker 会按 forge.Hash 校验，命中即跳过下载。
+        var installerCacheFolder = Path.Combine(ModBase.pathTemp, "Cache");
+        Directory.CreateDirectory(installerCacheFolder);
+        var installerAddress = Path.Combine(installerCacheFolder, "forge_installer.jar");
+
         var versionFolder = $@"{mcFolder}versions\{targetVersion}\";
         var displayName = $"{loaderName} {inherit} - {loaderVersion}";
         var loaders = new List<ModLoader.LoaderBase>();
@@ -2049,12 +2058,16 @@ public static class ModDownloadLib
                 var forge = (ModDownload.DlForgeVersionEntry)info;
                 var fileName =
                     $"{forge.Inherit.Replace("-", "_")}-{forge.FileVersion}/forge-{forge.Inherit.Replace("-", "_")}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}";
+                // 源列表走 PCL 自己的源选择器（与 ModLibrary/ModAssets 同一条路径），
+                // 不要再写死两个 URL：写死会绕过用户的下载源设置，且只剩
+                // bmclapi2 /maven + files.minecraftforge.net 两条，
+                // 前者 302 跳 open-bmcl-api.lunar.cc（本 fork 的 DoH 层解析不了）、
+                // 后者在国内极慢，于是 Forge installer 成了整包安装里唯一的瓶颈。
+                // 末尾补官方源兜底：bmclapi2 两条路径都挂时至少还有一条能走。
                 files.Add(new DownloadFile(
-                    new[]
-                    {
-                        $"https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/{fileName}",
-                        $"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{fileName}"
-                    }, installerAddress, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
+                    ModDownload.DlSourceLibraryGet($"https://maven.minecraftforge.net/{fileName}")
+                        .Append($"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{fileName}"),
+                    installerAddress, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
             }
 
             task.output = files;
@@ -2313,8 +2326,9 @@ public static class ModDownloadLib
                         {
                             if (installer is not null)
                                 installer.Dispose();
-                            if (File.Exists(installerAddress))
-                                File.Delete(installerAddress);
+                            // 不删 installerAddress：它现在是 pathTemp\Cache 里的持久缓存
+                            // （6MB 的 Forge installer，删了下次又要重下）。
+                            // 缓存完整性由下载前的 FileChecker(forge.Hash) 负责。
                         }
                         catch (Exception ex)
                         {
@@ -2393,8 +2407,7 @@ public static class ModDownloadLib
                             // 清理文件
                             if (installer is not null)
                                 installer.Dispose();
-                            if (File.Exists(installerAddress))
-                                File.Delete(installerAddress);
+                            // 同上：installerAddress 已是持久缓存，不删；只清 Legacy 解压中间目录
                             var unrarDir = Path.Combine(Path.GetDirectoryName(installerAddress), "_unrar");
                             if (Directory.Exists(unrarDir))
                                 ModBase.DeleteDirectory(unrarDir);

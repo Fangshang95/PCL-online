@@ -63,7 +63,10 @@ public static class FileDownloader
             catch (Exception ex)
             {
                 lastException = ex;
-                CleanupTempFiles(localPath);
+                // 换源时**不要**删掉已下载的部分：开着续传的话，Downloader 会接着
+                // 已有分块继续下。原实现在这里调 CleanupTempFiles，等于每次换源
+                // 都把进度清零——镜像源一超时，6MB 的 Forge installer 就得从 0 重下，
+                // 正是"整合包安装卡在下载 Forge 主文件、速度只有几 KB/s"的直接原因。
                 ModBase.Log(ex, $"[Download] 下载失败，尝试下一个源：{url}", ModBase.LogLevel.Debug);
             }
         }
@@ -75,7 +78,11 @@ public static class FileDownloader
         string customUserAgent, CancellationToken cancellationToken, bool enableParallelChunks, DownloadFile? trackedFile)
     {
         ModBase.Log($"[Download] 开始下载：{url} -> {localPath}");
-        CleanupTempFiles(localPath);
+        // 只在"没有可续传的半成品"时才清理。开着 EnableAutoResumeDownload 后，
+        // Downloader 依赖 <localPath>.pcldownloading 里的已完成分块做续传，
+        // 无条件删掉就等于每次都从头开始。
+        if (!File.Exists(localPath + ModNet.netDownloadEnd))
+            CleanupTempFiles(localPath);
 
         var perFileThreadLimit = enableParallelChunks ? Math.Max(1, ModNet.NetTaskThreadLimit) : 1;
         // 限制最大分块数，防止大文件下载时内存爆炸
@@ -89,7 +96,8 @@ public static class FileDownloader
             MaxTryAgainOnFailure = 2,
             BlockTimeout = 60000,
             DownloadFileExtension = ModNet.netDownloadEnd,
-            EnableAutoResumeDownload = false,
+            // 开启断点续传：换源/重试时接着已有分块下，而不是清零重来
+            EnableAutoResumeDownload = true,
             CustomHttpClientFactory = () => GetHttpClient(url),
             MinimumSizeOfChunking = 1024 * 1024L,
             MaximumMemoryBufferBytes = 256L * 1024 * 1024,

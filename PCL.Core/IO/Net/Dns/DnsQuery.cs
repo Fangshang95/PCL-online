@@ -76,19 +76,36 @@ public class DnsQuery : IDisposable
             ]
         );
 
-        if (queryResponse.All(static x => x is null))
-        {
-            LogWrapper.Warn(ModuleName, $"Failed to query IP for host {host} using DoH, use system default DNS");
-            return await System.Net.Dns.GetHostAddressesAsync(host, cts);
-        }
-
-        return queryResponse.Where(static x => x is not null)
+        var answers = queryResponse.Where(static x => x is not null)
             .SelectMany(static x => x!.Answers)
             .Where(static x => x.Type is DnsQueryType.A or DnsQueryType.AAAA)
             .Select(static x => x.Resource as DnsIpAddressResource)
             .Where(static x => x is not null)
             .Select(static x => x!.IPAddress)
             .ToArray();
+
+        // DoH 拿到响应但**没有任何 A/AAAA 记录**时，同样要回退系统 DNS。
+        // 原实现在这里直接返回空数组，于是 HostConnectionHandler 会抛
+        // "DNS resolution failed for {host}" 且不重试——对 BMCLAPI 这类
+        // 会 302 到 open-bmcl-api.lunar.cc 等第三方域名的镜像站点，
+        // 表现为下载源无故超时、反复换源重下。
+        if (answers.Length == 0)
+        {
+            LogWrapper.Warn(ModuleName,
+                $"DoH returned no A/AAAA answer for {host}, use system default DNS");
+            try
+            {
+                return await System.Net.Dns.GetHostAddressesAsync(host, cts);
+            }
+            catch (Exception ex)
+            {
+                LogWrapper.Warn(ModuleName,
+                    $"System DNS also failed for {host}: {ex.Message}");
+                return answers;
+            }
+        }
+
+        return answers;
     }
 
     public void Dispose()
