@@ -51,27 +51,8 @@ internal static class Program
         Log("========== 引导器启动 ==========");
         Log("目录：" + baseDir);
 
-        // 提权安装模式：runas 带 --pcl-install-runtime <net.zip路径> 进来，
-        // 把运行时装进 %ProgramFiles%\dotnet（apphost 默认查找位置，全局免疫），装完即退
-        var installIdx = Array.IndexOf(args, "--pcl-install-runtime");
-        if (installIdx >= 0)
-        {
-            var zip = installIdx + 1 < args.Length ? args[installIdx + 1]
-                     : Path.Combine(baseDir, "net.zip");
-            if (!File.Exists(zip))
-            {
-                MessageBoxW(IntPtr.Zero, "找不到运行时安装包 net.zip，请把它放到启动器同级目录。",
-                            "PClonline 运行时安装", (uint)0x10);
-                return 5;
-            }
-            var code = RuntimeInstaller.InstallToProgramFiles(zip, Log);
-            MessageBoxW(IntPtr.Zero,
-                code == 0
-                    ? ".NET 运行时安装完成！\n\n请重新双击 PClonine.exe 启动启动器（以后永远直接启动，不会再弹这个）。"
-                    : "运行时安装失败，请手动安装 .NET 10 Desktop Runtime：\nhttps://dotnet.microsoft.com/download/dotnet/10.0",
-                "PClonline 运行时安装", (uint)(code == 0 ? 0x40 : 0x10));
-            return code == 0 ? 0 : 6;
-        }
+        // v50.11.7：不再有提权安装模式。运行环境由玩家自己下载安装，
+        // 启动器只负责检测 + 把官方下载链接指出来（CE 原版做法）。
 
         try
         {
@@ -128,8 +109,9 @@ internal static class Program
                     else
                     {
                         Log("内置版本 " + embeddedVer + " 与应用层 " + (localVer ?? "（未知）") +
-                            " 不同，但找不到运行时来源（同级/子目录无 net.zip、系统无 .NET 10）——"
-                            + "保留旧版继续运行，请把 net.zip 放到启动器同级目录后重启即升级");
+                            " 不同，但系统里没装可用的 .NET——保留旧版继续运行；"
+                            + "请先按提示安装 .NET 运行环境（" + RuntimeInstaller.DownloadUrl +
+                            "），之后重新双击即完成升级");
                     }
                 }
                 else
@@ -149,30 +131,23 @@ internal static class Program
                     return 2;
                 }
 
-                // 应用层是无框架版：运行时装到 %LOCALAPPDATA%\dotnet（v50.11.6 起，CE 式方案）。
-                // apphost 会自己扫这个标准位置，所以**不需要也不应该**传 DOTNET_ROOT——
+                // 应用层是无框架版：需要玩家系统里已有 .NET 运行时。
+                // apphost 会自己扫标准安装位置，所以**不需要也不应该**传 DOTNET_ROOT——
                 // UAC 提权的新进程不继承环境变量，传了反而埋雷（v50.11.4 主程序
                 // 0xC0000417 弹英文缺 .NET 就是这么来的）。
                 // runtimeDir 实参仅用于识别并迁移老的 runtime\ 外挂安装。
                 var runtimeRoot = await RuntimeInstaller.EnsureAsync(appDir, runtimeDir, manifest, Log);
-                if (runtimeRoot == "ELEVATING")
-                {
-                    // 已弹出 UAC 申请安装运行时——这里安静退出，装完玩家再双击即可。
-                    // 别再弹中文框（UAC 本身就是说明，叠弹窗只会让玩家困惑）
-                    return 3;
-                }
                 if (runtimeRoot == "")
                 {
                     // 没有运行时还硬拉起无框架程序 = 玩家看到的就是"闪一下就没了"。
-                    // 这里停下来把话说清楚，比让他反复双击强
+                    // 这里停下来把话说清楚，并给出官方下载链接，由玩家自行安装。
                     MessageBoxW(IntPtr.Zero,
-                        "启动器需要 .NET 运行时，自动安装失败，你的电脑上也没装。\n\n" +
-                        "解决办法（任选一个）：\n" +
-                        "① 把包里的 net.zip 放到启动器同级目录，重新双击（推荐，不用联网，会自动装到系统用户目录）\n" +
-                        "② 手动安装 .NET 10 Desktop Runtime：\n" +
-                        "https://dotnet.microsoft.com/download/dotnet/10.0\n\n" +
-                        "装好以后再双击就能直接启动了。",
-                        "PClonline 需要安装运行库", 0x40);
+                        "启动器需要 .NET 运行环境，你的电脑上还没装。\n\n" +
+                        "请自行下载安装（官方微软网站，约 60MB）：\n" +
+                        RuntimeInstaller.DownloadUrl + "\n\n" +
+                        "安装时选「Windows Desktop Runtime」即可。\n" +
+                        "装好后重新双击 PClonine.exe 就能启动。",
+                        "PClonline 需要安装运行环境", 0x40);
                     return 4;
                 }
 

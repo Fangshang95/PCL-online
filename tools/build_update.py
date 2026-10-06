@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-v50.11 热更新打包脚本（两层分离：运行时 / 应用层）
+v50.11 热更新打包脚本（应用层自展开 + 运行环境由玩家自备）
 
-结构（v50.11 起，取代 v50.10 的「全量自包含 + 文件级增量」方案）：
-  运行时 runtime\  —— 只装一次，之后永不动
-  应用层 app\      —— 每次更新全量覆盖
+结构（v50.11.7 起）：
+  应用层 app\        —— exe 内嵌 app.zip 首跑自展开，每次更新全量覆盖
+  运行环境           —— **不再随包分发**。玩家自行从微软官网下载安装
+                       .NET Desktop Runtime 10（x64），启动器只检测 + 给下载链接
 
 产出（放到同一个 GitHub Release 的 latest 下）：
   version.json     清单（ECDSA 签名）
   version.json.sig 签名
   app.zip          无框架应用层（framework-dependent，不含运行时）
-  net.zip          .NET 运行时包（hostfxr + shared\<framework>\<ver>\*）
+  PCLonline-<ver>-offline.zip  exe + 使用说明 + 运行环境说明
 
-玩家侧流程：
-  1. 首跑：exe 内嵌 app.zip → 自展开到 app\（只有应用层，几十个文件）
-  2. 缺运行时：引导器先探测系统里有没有够用的 .NET 10；没有就下 net.zip
-     解压到 runtime\（标准安装布局），之后每次更新都不会再碰它
-  3. 更新：只下 app.zip 全量，覆盖 app\ 里的文件，运行时目录完全不动
-  → 于是「基线版本 / diff / remove 列表 / 多份 patch」这套复杂度全部消失
+v50.11.7 的取舍（回退 v50.11.6 的自动安装）：
+  v50.11.6 会用包内 net.zip 申请 UAC 把运行时自动装进 %ProgramFiles%\dotnet。
+  实测对玩家不可靠——提权可能被拒、杀软拦 UAC、弱网下 70MB 包下不动、
+  老版本残留难清理；而且替玩家装系统组件超出了启动器该做的事。
+  故改为 CE 原版做法：启动器只检测，缺环境就弹窗给官方下载链接。
+  **不联网下载、不提权安装、不写任何系统目录。**
 
-为什么 net.zip 直接取自本机 SDK：
-  sc（self-contained）publish 出来的是「apphost + 运行时 dll 平铺」，
-  不能直接当 DOTNET_ROOT 用（hostfxr 要找 shared\<framework>\<ver>\ 布局），
-  所以这里按 fx 应用声明的框架版本，从 SDK 根目录挑出
-  {dotnet.exe, hostfxr.dll, hostpolicy.dll, shared\<name>\<ver>\*\*} 打成包。
+保留的两层结构：
+  1. 首跑：exe 内嵌 app.zip → 自展开到 app\
+  2. 更新：只下 app.zip 全量覆盖 app\，运行环境用户自己管
+  → 「基线版本 / diff / remove 列表 / 多份 patch」这套复杂度全部消失
 
 用法：
-  python build_update.py v50.11.0
+  python build_update.py v50.11.7
 """
 import ctypes
 import datetime
@@ -134,66 +134,6 @@ def read_frameworks(app_dir):
     if not out and target.get("framework"):
         out.append((target["framework"].get("name"), target["framework"].get("version") or "0.0.0"))
     return out
-
-
-def pick_runtime_files(fw_list):
-    """在本机 SDK 里为每个 framework 挑一个可用版本，返回 {abs_root: [rel]}
-
-    版本选择沿用 .NET 默认 roll-forward：≥ 声明版本的最高版本（这里取第一个满足的）。
-    根文件固定带 dotnet.exe / hostfxr.dll / hostpolicy.dll —— 移动运行时最小集合。
-    """
-    roots = {}
-
-    def add_tree(root, sub):
-        base = os.path.join(root, sub)
-        if not os.path.isdir(base):
-            return 0
-        n = 0
-        for dirpath, _, files in os.walk(base):
-            for f in files:
-                rel = os.path.relpath(os.path.join(dirpath, f), root).replace("\\", "/")
-                roots.setdefault(root, []).append(rel)
-                n += 1
-        return n
-
-    tops = {}
-    for name, want in fw_list:
-        shared = os.path.join(SDK_DIR, "shared", name)
-        if not os.path.isdir(shared):
-            sys.exit("SDK 里没有运行时 %s（%s 缺失）" % (name, shared))
-        vers = []
-        for v in sorted(os.listdir(shared)):
-            p = os.path.join(shared, v)
-            if os.path.isdir(p):
-                vers.append((tuple(int(x) for x in v.split(".") if x.isdigit()), v))
-        if not vers:
-            sys.exit("SDK 里 %s 没有可用版本" % name)
-        want_t = tuple(int(x) for x in want.split(".") if x.isdigit())
-        pick = None
-        for t, v in vers:
-            if t >= want_t:
-                pick = v
-                break
-        if pick is None:
-            pick = vers[-1][1]
-            print("  警告：%s 声明 %s，SDK 最高只到 %s，将用后者" % (name, want, pick))
-        n = add_tree(SDK_DIR, "shared/%s/%s" % (name, pick))
-        tops[name] = pick
-        print("  运行时 %s → shared/%s/%s（%d 个文件）" % (name, name, pick, n))
-
-    # 移动运行时的根文件：dotnet.exe + 与 shared 版本对齐的 host\fxr\<ver>\
-    if not os.path.isfile(os.path.join(SDK_DIR, "dotnet.exe")):
-        sys.exit("SDK 缺少 dotnet.exe")
-    roots.setdefault(SDK_DIR, []).append("dotnet.exe")
-    host_ver = max(tops.values()) if tops else ""
-    host_dir = os.path.join(SDK_DIR, "host", "fxr", host_ver)
-    if not os.path.isdir(host_dir):
-        sys.exit("SDK 缺少 host\\fxr\\%s（hostfxr 版本与运行时不一致）" % host_ver)
-    n = add_tree(SDK_DIR, "host/fxr/%s" % host_ver)
-    print("  hostfxr → host/fxr/%s（%d 个文件）" % (host_ver, n))
-    return roots
-
-
 def main():
     version = sys.argv[1] if len(sys.argv) > 1 else "v50.11.0"
     today = datetime.date.today().strftime("%Y%m%d")
@@ -218,22 +158,16 @@ def main():
     total = sum(e["size"] for e in entries)
     print("应用层：%d 个文件，共 %.1f MB" % (len(entries), total / 1048576), flush=True)
 
-    # 2. 组装运行时包（net.zip，随包分发 = 玩家要的"包里的 net 安装包"）
-    print("--- 组装运行时 ---", flush=True)
+    # 2. 运行环境说明文件（v50.11.7：不再随包分发 net.zip）
+    #    运行环境改由玩家自己从微软官网下载安装（CE 原版做法），
+    #    启动器缺环境时只弹窗给下载链接，不联网下载、不提权安装。
+    #    包里只留一份中文说明 + 官方链接，让玩家知道去哪下。
+    print("--- 生成运行环境说明 ---", flush=True)
     fw_list = read_frameworks(APP_DIR)
     if not fw_list:
-        sys.exit("应用层 runtimeconfig 里没声明 framework，无法组装运行时包")
+        sys.exit("应用层 runtimeconfig 里没声明 framework，无法确定所需运行环境")
     print("  声明的框架：%s" % ", ".join("%s %s" % (n, v) for n, v in fw_list), flush=True)
-    rt_roots = pick_runtime_files(fw_list)
-    rt_entries = []
-    for rtroot, rels in rt_roots.items():
-        for rel in rels:
-            full = os.path.join(rtroot, rel.replace("/", os.sep))
-            rt_entries.append({"path": rel, "size": os.path.getsize(full),
-                               "sha256": sha256_of(full)})
-    rt_entries.sort(key=lambda e: e["path"])
-    print("运行时：%d 个文件，共 %.1f MB" % (len(rt_entries),
-                                       sum(e["size"] for e in rt_entries) / 1048576), flush=True)
+    fw_pretty = "、".join("%s %s" % (n, v) for n, v in fw_list)
 
     out_dir = os.path.join(DIST, version)
     upd_dir = os.path.join(out_dir, "update")
@@ -247,11 +181,33 @@ def main():
     # 3b. 对外发布的全量应用层
     full_zip = os.path.join(upd_dir, "app.zip")
     full_size = zip_files(full_zip, {APP_DIR: all_rels})
-    print("app.zip：%.1f MB（自包含应用层）" % (full_size / 1048576), flush=True)
-    # 3c. 运行时包
-    net_zip = os.path.join(upd_dir, "net.zip")
-    net_size = zip_files(net_zip, rt_roots)
-    print("net.zip ：%.1f MB（.NET 运行时安装包）" % (net_size / 1048576), flush=True)
+    print("app.zip：%.1f MB（无框架应用层）" % (full_size / 1048576), flush=True)
+    # 3c. 运行环境说明文件（v50.11.7：替代原 net.zip，玩家照着它自己去官网下载）
+    env_txt = os.path.join(upd_dir, "运行环境-请先安装.txt")
+    with open(env_txt, "w", encoding="utf-8") as f:
+        f.write(
+            "PClonine 需要先安装 .NET 运行环境（一次性，之后永不再需要）\r\n"
+            "\r\n"
+            "【需要什么】\r\n"
+            "%s\r\n"
+            "即微软官方 .NET Desktop Runtime 10（64 位）。\r\n"
+            "\r\n"
+            "【去哪儿下】\r\n"
+            "https://dotnet.microsoft.com/download/dotnet/10.0\r\n"
+            "\r\n"
+            "【怎么装】\r\n"
+            "1) 打开上面的网址，页面拉到 “SDK”/“Runtime” 一栏；\r\n"
+            "2) 点 “Windows Desktop Runtime”，选 x64 的 exe 下载（约 60MB）；\r\n"
+            "3) 双击安装，一路点“下一步”即可，不需要改任何选项；\r\n"
+            "4) 装完重新双击 PClonine.exe 就能启动。\r\n"
+            "\r\n"
+            "【说明】\r\n"
+            "· 启动器不会再帮你自动下载或自动安装运行环境（避免 UAC 提权、\r\n"
+            "  杀软拦截、弱网下不动等问题）；缺环境时它只会弹窗提示你这个链接。\r\n"
+            "· 如果你用的是 Windows 11 或 Win10（较新版本），系统可能已经自带了，\r\n"
+            "  直接双击 PClonine.exe 就能用，不会弹提示。\r\n" % fw_pretty
+        )
+    print("运行环境-请先安装.txt（%.0f KB）" % (os.path.getsize(env_txt) / 1024), flush=True)
 
     # 包地址一律写相对文件名：客户端按"清单取自哪个地址"拼绝对 URL，
     # 清单字节原样返回才不会破坏 ECDSA 签名
@@ -260,21 +216,14 @@ def main():
         "url": "app.zip",
         "size": full_size, "sha256": sha256_of(full_zip),
     }]
-    runtime_block = {
-        "url": "net.zip",
-        "size": net_size,
-        "sha256": sha256_of(net_zip),
-        "count": len(rt_entries),
-        "files": rt_entries[:200],   # 完整性抽样校验用，全量清单反而没必要下
-    }
 
     # 4. version.json + 签名（只写到发布目录；APP_DIR\version.json 是 1b 写的简版标记，
     #    千万别用完整清单盖回去——下次构建又会把它当残留嵌进 exe）
+    #    v50.11.7：不再有 runtime 段（没有随包分发的运行时了）
     manifest = {
         "version": version,
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         "files": entries,
-        "runtime": runtime_block,
         "packages": packages,
     }
     mpath = os.path.join(upd_dir, "version.json")
@@ -315,19 +264,28 @@ def main():
     print("sha256：%s" % sha256_of(out), flush=True)
     print("发布资产：%s" % upd_dir, flush=True)
 
-    # 5b. 离线包：自包含形态下单 exe 本身就是离线包，这里只做 exe + 说明 的合并包
+    # 5b. 离线包：v50.11.7 起运行时不再随包分发，包里只有 exe + 两份说明
     off_zip = os.path.join(upd_dir, "PCLonline-%s-offline.zip" % version)
-    readme = ("\ufeffPClonine 离线安装包 %s\r\n\r\n"
-              "1. 把压缩包里的全部文件解压到任意文件夹（放哪都行，别放在带 # 的路径里）\r\n"
-              "2. 双击 PClonine.exe，会自动把 net.zip 解压安装到系统用户目录（一次性，约 20 秒），之后永远不再需要\r\n"
-              "3. 之后想升级：直接用新 exe 覆盖 PClonine.exe 即可，用户数据都会保留\r\n"
-              "   （在能连 GitHub 的网络下，启动器也会自动检查并安装更新）\r\n") % dict(version=version)
+    readme = ("\ufeffPClonine %s\r\n\r\n"
+              "【第 1 步：装运行环境（只需一次）】\r\n"
+              "本启动器需要微软官方 .NET Desktop Runtime 10（64 位，约 60MB）。\r\n"
+              "请自行下载安装：\r\n"
+              "    https://dotnet.microsoft.com/download/dotnet/10.0\r\n"
+              "打开网址 → 点 “Windows Desktop Runtime” → 选 x64 的 exe → 双击安装。\r\n"
+              "（Windows 11 / 较新的 Win10 可能已自带，直接双击 exe 也能用）\r\n"
+              "\r\n"
+              "【第 2 步：启动】\r\n"
+              "1. 把压缩包里的全部文件解压到任意文件夹\r\n"
+              "2. 双击 PClonine.exe\r\n"
+              "3. 缺环境时它会弹窗并给你下载链接（不会自动下载安装）\r\n"
+              "\r\n"
+              "【之后升级】\r\n"
+              "直接用新 exe 覆盖 PClonine.exe 即可，用户数据（PCL\\ 文件夹）都会保留。\r\n"
+              "在能连 GitHub 的网络下，启动器也会自动检查并安装更新。\r\n") % dict(version=version)
     with zipfile.ZipFile(off_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         z.write(out, "PClonine.exe")
-        # net.zip 本身就是压缩包，再 DEFLATE 一遍几乎不省体积（实测省 0.6%）却让解压慢好几倍，
-        # 原样存进去——玩家用任何解压工具都能秒开
-        z.write(net_zip, "net.zip", zipfile.ZIP_STORED)
         z.writestr("使用说明.txt", readme)
+        z.write(env_txt, "运行环境-请先安装.txt")
     print("离线包：%s（%.1f MB）" % (off_zip, os.path.getsize(off_zip) / 1048576), flush=True)
 
     # 6. 上传清单（资产名必须 ASCII，否则 GitHub 会 422 / 改写成 default.txt）
@@ -336,14 +294,13 @@ def main():
         "",
         "  version.json      清单（ECDSA 签名）",
         "  version.json.sig  签名",
-        "  app.zip            %.1f MB（%s应用层，每次更新全量覆盖）"
-        % (full_size / 1048576, "自包含" if rt_roots is None else "无框架"),
-    ]
-    if rt_roots is not None:
-        lines.append("  net.zip            %.1f MB（.NET 运行时，装一次就再也不用下）"
-                     % (net_size / 1048576))
-    lines += [
+        "  app.zip            %.1f MB（无框架应用层，每次更新全量覆盖）"
+        % (full_size / 1048576),
         "  PCLonline-%s-offline.zip  离线安装包（给下不动 GitHub 的玩家）" % version,
+        "",
+        "运行环境不再随包分发：玩家自行从微软官网下载 .NET Desktop Runtime 10（64 位），",
+        "  https://dotnet.microsoft.com/download/dotnet/10.0",
+        "启动器缺环境时只弹窗给链接，不联网下载、不提权安装。",
         "",
         "清单里的包地址是相对文件名，客户端按清单来源自动拼成绝对地址：",
         "  GitHub  → " + GH_BASE + "/app.zip",
@@ -355,8 +312,9 @@ def main():
         "  · 这些资产必须都在同一个 latest Release 里（latest/download 前缀要求）",
         "  · version.json 与 version.json.sig 必须成对更新（签名针对文件原始字节，",
         "    Release 会原样返回，任何改动都会导致验签失败）",
-        "  · 应用层%s，更新时整体覆盖 app\\"
-        % ("自包含（运行时已打进包）" if rt_roots is None else "无框架，运行时由 net.zip 装到 runtime"),
+        "  · 应用层为无框架发布（运行时不在包里），更新时整体覆盖 app\\",
+        "  · 运行环境由玩家自行从微软官网下载 .NET Desktop Runtime 10（x64），",
+        "    启动器只检测并给链接，不联网下载、不提权安装",
     ]
     with open(os.path.join(upd_dir, "upload-notes.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
