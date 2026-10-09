@@ -2,72 +2,108 @@
 
 <div align="center">
 
-<img src="Plain Craft Launcher 2/Images/icon.ico" alt="Logo" width="80" height="80">
+# PClonline
 
-# PCL Community Edition
+**A Minecraft multiplayer launcher — hosting a server is as easy as creating a room**
 
-[![Stars](https://img.shields.io/github/stars/PCL-Community/PCL-CE?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZlcnNpb249IjEiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTTggLjI1YS43NS43NSAwIDAgMSAuNjczLjQxOGwxLjg4MiAzLjgxNSA0LjIxLjYxMmEuNzUuNzUgMCAwIDEgLjQxNiAxLjI3OWwtMy4wNDYgMi45Ny43MTkgNC4xOTJhLjc1MS43NTEgMCAwIDEtMS4wODguNzkxTDggMTIuMzQ3bC0zLjc2NiAxLjk4YS43NS43NSAwIDAgMS0xLjA4OC0uNzlsLjcyLTQuMTk0TC44MTggNi4zNzRhLjc1Ljc1IDAgMCAxIC40MTYtMS4yOGw0LjIxLS42MTFMNy4zMjcuNjY4QS43NS43NSAwIDAgMSA4IC4yNVoiIGZpbGw9IiNlYWM1NGYiLz48L3N2Zz4=&logoSize=auto&label=stars&labelColor=444444&color=eac54f)](https://github.com/PCL-Community/PCL-CE/)
-![GitHub Release](https://img.shields.io/github/v/release/PCL-Community/PCL-CE?label=release&logo=github&style=for-the-badge)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/PCL-Community/PCL-CE/build-test.yml?style=for-the-badge)
+One-click hosting · Friend room codes · P2P-first / frp relay fallback
 
-[![Issues](https://img.shields.io/github/issues/PCL-Community/PCL-CE?style=for-the-badge&label=issues&labelColor=444444&color=1F883D&logo=github)](https://github.com/PCL-Community/PCL-CE/issues)
-[![Pull requests](https://img.shields.io/github/issues-pr/PCL-Community/PCL-CE?style=for-the-badge&label=pull%20requests&labelColor=444444&color=1F883D&logo=github)](https://github.com/PCL-Community/PCL-CE/pulls)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/PCL-Community/PCL-CE/total?style=for-the-badge)
-[![Bilibili](https://img.shields.io/badge/Threads-bilibili-00A4DB?style=for-the-badge&labelColor=444444&logo=bilibili)](https://space.bilibili.com/3546847192811755/dynamic) <br />
-
-<a href="https://trendshift.io/repositories/21800?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-21800" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/21800/daily?language=C%23" alt="PCL-Community%2FPCL-CE | Trendshift" width="250" height="55"/></a>
-<a href="https://trendshift.io/repositories/21800" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21800" alt="PCL-Community%2FPCL-CE | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-[download](https://github.com/PCL-Community/PCL-CE/releases/latest) |
-[Upstream repo](https://github.com/Meloong-Git/PCL)
-
-[Submit issues](https://github.com/PCL-Community/PCL-CE/issues/new/choose) |
-[Contribution Guidelines](https://github.com/PCL-Community/PCL-CE/wiki/开发指南)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Fangshang95/PCL-online?style=for-the-badge&logo=github)](https://github.com/Fangshang95/PCL-online/releases)
+[![Downloads](https://img.shields.io/github/downloads/Fangshang95/PCL-online/total?style=for-the-badge)](https://github.com/Fangshang95/PCL-online/releases)
+[![Roadmap](https://img.shields.io/badge/roadmap-in%20progress-orange?style=for-the-badge)](#-roadmap)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4?style=for-the-badge&logo=dotnet)](https://dotnet.microsoft.com/)
+[![Stars](https://img.shields.io/github/stars/Fangshang95/PCL-online?style=for-the-badge&color=eac54f)](https://github.com/Fangshang95/PCL-online)
 
 </div>
 
-PCL CE is a community edition developed as a secondary project based on PCL’s open-source code. It includes features and improvements that have not yet been implemented in the main branch.
+PClonline is a Minecraft multiplayer launcher built on top of **PCL2-CE (Plain Craft Launcher 2 Community Edition)**.
 
-The version numbers of the community edition do not strictly correspond to those of the main branch, so please do not report community edition issues to the official repository.
+Core value: **one-click server hosting + joining by friend room code + P2P / frp dual-channel networking** — no public IP, no port forwarding, no command line required.
 
-Everyone is welcome to try it out!
+> ⚠️ This is a community-driven third-party launcher and is not affiliated with Mojang Studios or Microsoft in any way.
 
-**Developing group:** [599620549](https://qm.qq.com/q/PNQA4Md8wc) | **User group 1:** [1028074835](https://qm.qq.com/q/qrMGJo8BQQ) | **User group 2:** [1070029541](https://qm.qq.com/q/lBywbDMWhG)
+## ✨ Features
 
-## 💻 Supported Platforms
+On top of everything PCL2-CE already offers (launcher core, mod management, downloads, multi-account support, etc.), the `PCL.MCStudio` module adds:
 
-| Operating System | Support Status | Requirements |
+- **One-click hosting**: automatically provisions the server (vanilla / fabric, etc.) and picks a compatible Java for the MC version (downloads Mojang's official runtime with dual-source verification when no local compatible Java is found)
+- **Join by room code**: friends enter a 6-digit room code to join, and the same modpack is provisioned automatically (multi-key marker reuse, no duplicate downloads)
+- **P2P direct connection (preferred)**: UDP hole punching (12-way concurrent punch pool, three-stage packet cadence, port stepping learning) + PCP / UPnP / NATPMP port mapping racing in parallel + KCP data channel
+- **frp relay (fallback)**: automatically falls back to an frp tunnel when the NAT is unsuitable for direct connections, authenticated with room-scoped temporary credentials
+- **Account system**: email registration / friend list / list of rooms opened by friends
+- **Local token DPAPI encryption**: login credentials are encrypted as a whole on disk (CurrentUser scope)
+
+## 🚀 Quick Start
+
+1. Download the zip from [Releases](https://github.com/Fangshang95/PCL-online/releases) and extract it (the self-contained build works out of the box)
+2. Launch `Plain Craft Launcher 2.exe` and sign in (during the beta, accounts are distributed by admins — for a test account, add QQ: 3215701517)
+3. On the multiplayer page, create a room, pick a game version or modpack, and get a 6-digit room code
+4. Send the room code to your friends — they join, get the same environment provisioned automatically, and can play right away
+
+## 📦 Downloads
+
+See [Releases](https://github.com/Fangshang95/PCL-online/releases). Both builds are functionally identical:
+
+| Build | Size | Requirement |
 |---|---|---|
-| Windows 10 1809 (17763) or later | ✅ Fully supported | [.NET 10 Desktop Runtime](http://get.dot.net/10) |
-| Windows 8 to Windows 10 1809 (17763) | ⚠️ Expected to run; community support offered at discretion | [.NET 10 Desktop Runtime](http://get.dot.net/10) |
-| Windows 7 or earlier | ❌ Not supported | N/A |
-| macOS / Linux / Other OS | ⚠️ Cross-platform development only (cross-compilation) | [.NET 10 SDK](http://get.dot.net/10) |
+| Self-contained (recommended) | ~83 MB | None (bundles the .NET runtime, extract and run) |
+| Framework-dependent | ~16 MB | [.NET Desktop Runtime 10](https://get.dot.net/10) must be installed |
 
-**✅ Fully supported**: We will provide as much support as possible, but you must ensure you are using the latest version of the launcher.
+## 🗺️ Roadmap
 
-**⚠️ Expected to run; community support offered at discretion**: PCL CE is expected to run on these platforms, but full functionality is not guaranteed. You may need to upgrade to a fully supported OS version to receive further community technical support.
+- [x] One-click hosting & 6-digit room code joining
+- [x] P2P direct + frp relay dual channel (auto switching)
+- [x] Account / friends / room list system
+- [ ] Beta in progress: stability and experience polish
+- [ ] Automatic frpc runtime download
+- [ ] Cloud HTTPS
+- [ ] More server types (Paper / Forge, etc.)
+- [ ] One-click modpack sharing
 
-**❌ Not supported**: PCL CE may not be usable on these platforms and might not even launch at all. Please upgrade your OS to use PCL CE.
+## ⚠️ Multiplayer Service Notes
 
-**⚠️ Cross-platform development only (cross-compilation)**: PCL CE’s source code can be built on macOS and Linux, but it cannot run directly. As a developer, you can develop on these platforms and then move the build artifacts to Windows for testing.
+- P2P signaling, frp relay and the account system rely on PClonline's official cloud service (self-hosted; the server code is not open source for now — this repository contains the client only)
+- Connection configuration such as the cloud address is shipped inside the release package's `mcstudio/` directory and never enters the source tree (the source contains placeholder domains)
+- The server follows a "security does not rely on obscurity" design: two-layer key authentication, room-scoped temporary credentials, signaling ownership validation, and multi-layer rate limiting — the client holds no high-privilege secrets
 
-**Note**:     
-The community only supports the latest version of the launcher.    
-Depending on the nature of certain issues (e.g., an incomplete system environment), you may still need to upgrade your OS to continue receiving support.    
-PCL CE always recommends using the latest version of your OS for the best experience.    
-You can still try using the latest launcher version on unsupported platforms, but you may encounter many additional problems.
+## 🔨 Building from Source
 
-## 🔒 License
+Requires dotnet SDK 10.0+ (with `EnableWindowsTargeting`, already configured in the repository):
 
-- `Plain Craft Launcher 2/` uses [Custom License](https://github.com/PCL-Community/PCL-CE/blob/dev/Plain%20Craft%20Launcher%202/LICENCE)
-- `All other directories` use [Apache License 2.0](https://github.com/PCL-Community/PCL-CE/blob/dev/LICENSE)
+```bash
+dotnet build "Plain Craft Launcher 2/Plain Craft Launcher 2.csproj" -c Release          # verify compilation
+dotnet publish "Plain Craft Launcher 2/Plain Craft Launcher 2.csproj" -c Release -r win-x64 -p:PublishSingleFile=true -o publish   # self-contained publish
+dotnet publish "Plain Craft Launcher 2/Plain Craft Launcher 2.csproj" -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish-fx   # framework-dependent publish
+```
 
-## 🌟 Statistic
-![Alt](https://repobeats.axiom.co/api/embed/3e46296e6e3a134991a783480fd2f62723bb0353.svg "Repobeats analytics image")
+Supports Windows x64 / ARM64.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=PCL-Community/PCL-CE&type=Date)](https://www.star-history.com/#PCL-Community/PCL-CE&Date)
+## 📁 Repository Layout
 
-**Views** (Total / Today): [![Hits](https://hits.zkitefly.eu.org/?tag=https://github.com/PCL-Community/PCL-CE)](https://hits.zkitefly.eu.org/?tag=https://github.com/PCL-Community/PCL-CE&web=true)
-## ❤️ Contributors
+```
+Plain Craft Launcher 2/    Main project (WPF shell + entry point)
+PCL.Core/                  PCL community core library
+PCL.MCStudio/              ★ Multiplayer module (the core addition of this project)
+PCL.MCStudio.SelfTest/     Self-test program for the multiplayer module
+```
 
-[![](https://contrib.rocks/image?repo=PCL-Community/PCL-CE)](https://github.com/PCL-Community/PCL-CE/graphs/contributors)
+## 🤝 Contributing
+
+- Found a bug or have a feature request? Feel free to open an [Issue](https://github.com/Fangshang95/PCL-online/issues) (Chinese is fine)
+- PRs are welcome: fork and work on the `main` branch, and make sure it compiles before submitting
+- For multiplayer service issues, please include the room code and timestamp to help us investigate
+
+## 🔒 Security
+
+Please do not open a public Issue for security problems — see [SECURITY.md](SECURITY.md).
+
+## 📄 License
+
+[Apache-2.0](LICENSE), with a [NOTICE](NOTICE) (attribution for the derivative work based on PCL2-CE and PCL).
+
+---
+
+If you find it useful, give it a ⭐ Star — it's the biggest motivation to keep improving
+
+[Download latest](https://github.com/Fangshang95/PCL-online/releases/latest) · [Report an issue](https://github.com/Fangshang95/PCL-online/issues) · [View roadmap](#-roadmap)

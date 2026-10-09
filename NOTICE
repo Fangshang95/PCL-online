@@ -1,0 +1,13 @@
+PClonline
+Copyright (c) 2026 PClonline contributors
+
+本产品为二次开发作品，基于以下项目构建：
+
+- PCL2-CE (Plain Craft Launcher 2 Community Edition)
+  https://github.com/PCL-Community/PCL-CE
+  以 Apache License 2.0 授权。
+
+- PCL (Plain Craft Launcher 2)
+  https://github.com/Meloong-Git/PCL
+
+本仓库仅包含客户端代码；联机服务端代码不在本仓库范围内。

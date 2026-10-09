@@ -2,72 +2,110 @@
 
 <div align="center">
 
-<img src="Plain Craft Launcher 2/Images/icon.ico" alt="Logo" width="80" height="80">
+# PClonline
 
-# PCL Community Edition
+**Minecraft 联机启动器 —— 让开服联机像建房间一样简单**
 
-[![Stars](https://img.shields.io/github/stars/PCL-Community/PCL-CE?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZlcnNpb249IjEiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHBhdGggZD0iTTggLjI1YS43NS43NSAwIDAgMSAuNjczLjQxOGwxLjg4MiAzLjgxNSA0LjIxLjYxMmEuNzUuNzUgMCAwIDEgLjQxNiAxLjI3OWwtMy4wNDYgMi45Ny43MTkgNC4xOTJhLjc1MS43NTEgMCAwIDEtMS4wODguNzkxTDggMTIuMzQ3bC0zLjc2NiAxLjk4YS43NS43NSAwIDAgMS0xLjA4OC0uNzlsLjcyLTQuMTk0TC44MTggNi4zNzRhLjc1Ljc1IDAgMCAxIC40MTYtMS4yOGw0LjIxLS42MTFMNy4zMjcuNjY4QS43NS43NSAwIDAgMSA4IC4yNVoiIGZpbGw9IiNlYWM1NGYiLz48L3N2Zz4=&logoSize=auto&label=stars&labelColor=444444&color=eac54f)](https://github.com/PCL-Community/PCL-CE/)
-![GitHub Release](https://img.shields.io/github/v/release/PCL-Community/PCL-CE?label=release&logo=github&style=for-the-badge)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/PCL-Community/PCL-CE/build-test.yml?style=for-the-badge)
+一键开服 · 好友房间码 · P2P 直连优先 / frp 中转兜底
 
-[![Issues](https://img.shields.io/github/issues/PCL-Community/PCL-CE?style=for-the-badge&label=issues&labelColor=444444&color=1F883D&logo=github)](https://github.com/PCL-Community/PCL-CE/issues)
-[![Pull requests](https://img.shields.io/github/issues-pr/PCL-Community/PCL-CE?style=for-the-badge&label=pull%20requests&labelColor=444444&color=1F883D&logo=github)](https://github.com/PCL-Community/PCL-CE/pulls)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/PCL-Community/PCL-CE/total?style=for-the-badge)
-[![哔哩哔哩](https://img.shields.io/badge/动态-bilibili-00A4DB?style=for-the-badge&labelColor=444444&logo=bilibili)](https://space.bilibili.com/3546847192811755/dynamic) <br />
-
-<a href="https://trendshift.io/repositories/21800?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-21800" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/21800/weekly?language=C%23" alt="PCL-Community%2FPCL-CE | Trendshift" width="250" height="55"/></a>
-<a href="https://trendshift.io/repositories/21800" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/21800" alt="PCL-Community%2FPCL-CE | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-[社区版下载](https://github.com/PCL-Community/PCL-CE/releases/latest) |
-[上游存储库](https://github.com/Meloong-Git/PCL)
-
-[提交问题](https://github.com/PCL-Community/PCL-CE/issues/new/choose) |
-[贡献指南](https://github.com/PCL-Community/PCL-CE/wiki/开发指南)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Fangshang95/PCL-online?style=for-the-badge&logo=github)](https://github.com/Fangshang95/PCL-online/releases)
+[![Downloads](https://img.shields.io/github/downloads/Fangshang95/PCL-online/total?style=for-the-badge)](https://github.com/Fangshang95/PCL-online/releases)
+[![Roadmap](https://img.shields.io/badge/roadmap-in%20progress-orange?style=for-the-badge)](#-路线图)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4?style=for-the-badge&logo=dotnet)](https://dotnet.microsoft.com/)
+[![Stars](https://img.shields.io/github/stars/Fangshang95/PCL-online?style=for-the-badge&color=eac54f)](https://github.com/Fangshang95/PCL-online)
 
 </div>
 
-PCL CE 是基于 PCL 开源代码二次开发的社区版本，包括了主线暂未制作的功能和改进！
+**English summary**: A Minecraft launcher built on PCL2-CE, featuring one-click server hosting and room-code multiplayer (P2P-first with FRP relay fallback).
 
-社区版的版本号与主线并非严格对应关系，也请不要向官方仓库反馈社区版问题。
+基于 **PCL2-CE（Plain Craft Launcher 2 Community Edition）** 二次开发的 Minecraft 联机启动器。
 
-欢迎大家来用用看！
+核心增值：**一键开服 + 好友房间码加入 + P2P / frp 双通道联机**——开服联机不再需要公网 IP、端口映射和命令行。
 
-**开发群:** [599620549](https://qm.qq.com/q/PNQA4Md8wc)[✦](https://t.me/+78XW2bUOvKJjMTZl) | **用户 1 群:** [1028074835](https://qm.qq.com/q/qrMGJo8BQQ) | **用户 2 群:** [1070029541](https://qm.qq.com/q/lBywbDMWhG)
+> ⚠️ 本项目为社区驱动的第三方启动器，与 Mojang Studios、Microsoft 无任何关联。
 
-## 💻 支持平台
+## ✨ 功能特性
 
-| 操作系统 | 支持情况 | 环境要求 |
+在 PCL2-CE 全部功能（启动器本体、模组管理、下载、多账户等）之上，`PCL.MCStudio` 模块新增：
+
+- **一键开服**：自动装配服务端（vanilla / fabric 等）、按 MC 版本智能选择兼容 Java（无本地兼容 Java 时自动下载 Mojang 官方 runtime，双源校验）
+- **房间码加入**：好友输入 6 位房间码即可加入，自动装配同款整合包（marker 多键复用，不重复下载）
+- **P2P 直连（优先）**：UDP 打洞（12 路并发打洞池、三段发包节奏、端口步进学习）+ PCP / UPnP / NATPMP 三协议端口映射并行竞速 + KCP 数据通道
+- **frp 中转（兜底）**：NAT 不适合直连时自动回落 frp 隧道，房间级临时凭证鉴权
+- **账号体系**：邮箱注册 / 好友列表 / 好友所开房间一览
+- **本地令牌 DPAPI 加密**：登录凭据整包加密落盘（CurrentUser 范围）
+
+## 🚀 快速上手
+
+1. 从 [Releases](https://github.com/Fangshang95/PCL-online/releases) 下载 zip 并解压（自包含版开箱即用）
+2. 启动 `Plain Craft Launcher 2.exe`，登录账号（内测阶段账户由管理员分发，需要测试账号请加 QQ：3215701517）
+3. 在联机页面创建房间，选择游戏版本或整合包，得到 6 位房间码
+4. 把房间码发给好友——他们加入后自动装配同款环境，直接开玩
+
+## 📦 下载
+
+见 [Releases](https://github.com/Fangshang95/PCL-online/releases)，两个版本功能完全一致：
+
+| 版本 | 体积 | 要求 |
 |---|---|---|
-| Windows 10 1809 (17763) 或更高 | ✅ 完整支持 | [.NET 10 Desktop Runtime](https://get.dot.net/10) |
-| Windows 8 - Windows 10 1809 (17763) | ⚠️ 理论能跑，酌情提供社区支持 | [.NET 10 Desktop Runtime](https://get.dot.net/10) |
-| Windows 7 或更低版本 | ❌ 不支持 | / |
-| macOS / Linux / 其他操作系统 | ⚠️ 仅跨平台开发支持（交叉编译） | [.NET 10 SDK](https://get.dot.net/10) |
+| 自包含版（推荐） | ~83 MB | 无（内置 .NET 运行时，解压即用） |
+| 框架依赖版 | ~16 MB | 需已安装 [.NET Desktop Runtime 10](https://get.dot.net/10) |
 
-**✅ 完整支持**：尽可能提供一切相关支持，但必须确保启动器为最新版本。
+## 🗺️ 路线图
 
-**⚠️ 理论能跑，酌情提供社区支持**：PCL CE 应该可以在这些平台上运行，但不保证功能完全可用。你可能需要升级到完整支持的系统版本以获得进一步社区技术支持。
+- [x] 一键开服 & 6 位房间码加入
+- [x] P2P 直连 + frp 中转双通道（自动切换）
+- [x] 账号 / 好友 / 房间列表体系
+- [ ] 内测进行中：稳定性与体验打磨
+- [ ] frpc 运行时自动下载
+- [ ] 云端 HTTPS
+- [ ] 更多服务端类型（Paper / Forge 等）
+- [ ] 整合包一键分享
 
-**❌ 不支持**：PCL CE 在这些平台的可用性较低，甚至压根打不开。请升级操作系统以使用 PCL CE。
+## ⚠️ 联机服务说明
 
-**⚠️ 仅跨平台开发支持（交叉编译）**：PCL CE 的源代码可以在 macOS 与 Linux 平台编译，但无法直接运行。作为开发者，你可以在这些平台上进行开发，然后将编译产物转移到 Windows 系统测试。
+- P2P 信令、frp 中转、账号体系依赖 PClonline 官方云端服务（自部署，服务端代码暂不开源，本仓库仅开源客户端）
+- 云端地址等连接配置随发布包 `mcstudio/` 目录下发，不进源码（源码内为占位域名）
+- 服务端采用「安全不靠隐藏」设计：双层密钥鉴权、房间级临时凭证、信令归属校验、多层限流——客户端侧不持有任何高权限密钥
 
-**注**：    
-社区仅对最新版本的启动器提供支持。    
-取决于部分问题的特殊性（如系统不完整），有时你仍然必须升级操作系统以继续获得支持。    
-PCL CE 始终建议使用最新版本的操作系统以获得最佳体验。    
-你仍然可以尝试在不受支持的系统上使用 PCL CE，但可能会遇到很多额外问题。
+## 🔨 从源码构建
 
-## 🔒 许可证
+需要 dotnet SDK 10.0+（需 `EnableWindowsTargeting`，仓库已配置）：
 
-- `Plain Craft Launcher 2/` 使用 [自定义许可证](https://github.com/PCL-Community/PCL-CE/blob/dev/Plain%20Craft%20Launcher%202/LICENCE)
-- `其余所有目录` 使用 [Apache License 2.0](https://github.com/PCL-Community/PCL-CE/blob/dev/LICENSE)
+```bash
+dotnet build "Plain Craft Launcher 2/Plain Craft Launcher 2.csproj" -c Release          # 验证编译
+dotnet publish "Plain Craft Launcher 2/Plain Craft Launcher 2.csproj" -c Release -r win-x64 -p:PublishSingleFile=true -o publish   # 自包含发布
+dotnet publish "Plain Craft Launcher 2/Plain Craft Launcher 2.csproj" -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish-fx   # 框架依赖发布
+```
 
-## 🌟 统计数据
-![Alt](https://repobeats.axiom.co/api/embed/3e46296e6e3a134991a783480fd2f62723bb0353.svg "Repobeats analytics image")
+支持 Windows x64 / ARM64。
 
-[![Star History Chart](https://api.star-history.com/chart?repos=PCL-Community/PCL-CE&type=date&legend=top-left&sealed_token=Ts-GaAXJ5nb9fJERusrXneo05pfZ83tMhReHJ98nmmlemBTqHS5Ozocdep1MTMdsX-6CRiQH9TqiS1Kk7SxjTfk02eUOxnm25oHff6TLLvrY7pGujOkU1IwjVFQLE-5GJYogutJAyI78jujBlOnpk3J2OKAY1PBhmkyUOzW1C1sdz5BzPbj2eBbJGvDx)](https://www.star-history.com/?repos=PCL-Community%2FPCL-CE&type=date&legend=top-left)
+## 📁 仓库结构
 
-**此页浏览量**（总计 / 今日）：[![Hits](https://hits.zkitefly.eu.org/?tag=https://github.com/PCL-Community/PCL-CE)](https://hits.zkitefly.eu.org/?tag=https://github.com/PCL-Community/PCL-CE&web=true)
-## ❤️ 贡献者
+```
+Plain Craft Launcher 2/    主工程（WPF 主体 + 入口）
+PCL.Core/                  PCL 社区核心库
+PCL.MCStudio/              ★ 联机模块（本项目核心增量）
+PCL.MCStudio.SelfTest/     联机模块自测程序
+```
 
-[![](https://contrib.rocks/image?repo=PCL-Community/PCL-CE)](https://github.com/PCL-Community/PCL-CE/graphs/contributors)
+## 🤝 参与贡献
+
+- 发现 Bug 或有功能建议：欢迎开 [Issue](https://github.com/Fangshang95/PCL-online/issues)（中文即可）
+- 欢迎 PR：fork 后基于 `main` 分支开发，提交前请先跑通编译
+- 联机服务相关问题请附房间码与时间点，便于排查
+
+## 🔒 安全
+
+发现安全问题请勿开公开 Issue，参见 [SECURITY.md](SECURITY.md)。
+
+## 📄 许可证
+
+[Apache-2.0](LICENSE)，含 [NOTICE](NOTICE)（基于 PCL2-CE 与 PCL 的二次开发声明）。
+
+---
+
+觉得好用就点个 ⭐ Star 吧——这是持续更新的最大动力
+
+[下载最新版](https://github.com/Fangshang95/PCL-online/releases/latest) · [报告问题](https://github.com/Fangshang95/PCL-online/issues) · [查看路线图](#-路线图)
