@@ -1663,17 +1663,11 @@ public static class ModDownloadLib
             var forge = (ModDownload.DlForgeVersionEntry)info;
             var legacyFileName =
                 $"{forge.Inherit}-{forge.FileVersion}/forge-{forge.Inherit}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}";
-            // 同新版路径：original 必须带完整 net/minecraftforge/forge/ 前缀，
-            // 否则 DlSourceLibraryGet 替换后会丢掉该段导致 404；
-            // 顺序同样是 官方 maven → bmclapi2 镜像 → files. CDN 兜底
+            // 同新版路径：完全走原版的 DlSourceLibraryGet（由它产出镜像顺序）
             var legacyOfficialUrl =
                 $"https://maven.minecraftforge.net/net/minecraftforge/forge/{legacyFileName}";
             files.Add(new DownloadFile(
-                new[] { legacyOfficialUrl }
-                    .Concat(ModDownload.DlSourceLibraryGet(legacyOfficialUrl)
-                        .Where(u => !u.Contains("maven.minecraftforge.net")))
-                    .Append(
-                        $"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{legacyFileName}"),
+                ModDownload.DlSourceLibraryGet(legacyOfficialUrl),
                 target, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
             }
 
@@ -1989,14 +1983,16 @@ public static class ModDownloadLib
 
         string loaderName = ModBase.GetStringFromEnum(forgeType);
         var isCustomFolder = (mcFolder ?? "") != (ModFolder.mcFolderSelected ?? "");
-        // Forge installer 有 6MB+，而 RequestTaskTempFolder() 是**一次性目录**
-        // （任务结束即被 TryClearTaskTemp 清掉），于是每装一次包都要重下 6MB；
-        // 碰上镜像超时更是把已下的进度全清掉（FileDownloader 关了续传）。
-        // 改存 pathTemp\Cache（与原版 PCL 的缓存语义一致）：跨任务复用，
-        // 且下面的 FileChecker 会按 forge.Hash 校验，命中即跳过下载。
-        var installerCacheFolder = Path.Combine(ModBase.pathTemp, "Cache");
-        Directory.CreateDirectory(installerCacheFolder);
-        var installerAddress = Path.Combine(installerCacheFolder, "forge_installer.jar");
+        // Forge installer 下载到**任务临时目录**（原版行为，勿改）。
+        //
+        // 关键：这里必须与 {pathTemp}Cache\forge_installer.jar 分开！
+        // 那个路径放的是 3.1KB 的**注入器 wrapper**（Resources/forge-installer.jar，
+        // 由下方 WriteFile 释放），它提供 com.bangbang93.ForgeInstaller 这个主类；
+        // 而本文件是真 installer（5.8MB，net.minecraftforge.installer.SimpleInstaller）。
+        // ForgelikeInjector 的 -cp 是 "Cache\forge_installer.jar;{target}"，
+        // 两者都要在类路径上——v50.11.8~v50.11.10 曾把 target 也改成 Cache\forge_installer.jar，
+        // 结果真 installer 覆盖掉 wrapper，报ClassNotFoundException: com.bangbang93.ForgeInstaller。
+        var installerAddress = ModMain.RequestTaskTempFolder() + "forge_installer.jar";
 
         var versionFolder = $@"{mcFolder}versions\{targetVersion}\";
         var displayName = $"{loaderName} {inherit} - {loaderVersion}";
@@ -2065,25 +2061,21 @@ public static class ModDownloadLib
                 var forge = (ModDownload.DlForgeVersionEntry)info;
                 var fileName =
                     $"{forge.Inherit.Replace("-", "_")}-{forge.FileVersion}/forge-{forge.Inherit.Replace("-", "_")}-{forge.FileVersion}-{forge.Category}.{forge.FileExtension}";
-                // 源列表走 PCL 自己的源选择器（与 ModLibrary/ModAssets 同一条路径），
-                // 不要再写死两个 URL：写死会绕过用户的下载源设置。
+                // 源列表 = 原版 PCL 的做法：直接把完整官方路径交给 DlSourceLibraryGet，
+                // 由它按用户的下载源设置产出镜像顺序（已比对原版
+                // 「Plain Craft Launcher 2.exe」内嵌字符串确认：
+                // https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/
+                // https://bmclapi2.bangbang93.com/libraries/net/minecraftforge/forge/
+                // https://maven.minecraftforge.net）。
                 //
-                // 注意 original 必须是**完整的官方 maven 路径**：
-                // DlSourceLibraryGet 是按 host 前缀做 Replace 的，只给它
-                // "https://maven.minecraftforge.net/{fileName}" 会替换成
+                // original 必须是**完整官方路径**：DlSourceLibraryGet 按 host 前缀做 Replace，
+                // 只给 "https://maven.minecraftforge.net/{fileName}" 会替换成
                 // bmclapi2/maven/1.20.1-47.4.10/… —— 少了 net/minecraftforge/forge/
-                // 一段，实测直接 404。所以这里要把 forge 目录补全再交给它。
+                // 一段，实测 404。
                 var officialForgeUrl =
                     $"https://maven.minecraftforge.net/net/minecraftforge/forge/{fileName}";
                 files.Add(new DownloadFile(
-                    // 顺序：官方 maven 优先（实测握手 ~1s）→ bmclapi2 两条镜像（跟随用户的
-                    // 下载源设置）→ files. CDN 最后兜底（实测握手 ~8s，Cloudflare 绕路）。
-                    // DlSourceLibraryGet 对 forge 只返回 bmclapi2 /maven 与 /libraries、
-                    // **不含 original**，所以官方源要自己补在最前面。
-                    new[] { officialForgeUrl }
-                        .Concat(ModDownload.DlSourceLibraryGet(officialForgeUrl)
-                            .Where(u => !u.Contains("maven.minecraftforge.net")))
-                        .Append($"https://files.minecraftforge.net/maven/net/minecraftforge/forge/{fileName}"),
+                    ModDownload.DlSourceLibraryGet(officialForgeUrl),
                     installerAddress, new ModBase.FileChecker(64 * 1024, hash: forge.Hash)));
             }
 
@@ -2343,9 +2335,8 @@ public static class ModDownloadLib
                         {
                             if (installer is not null)
                                 installer.Dispose();
-                            // 不删 installerAddress：它现在是 pathTemp\Cache 里的持久缓存
-                            // （6MB 的 Forge installer，删了下次又要重下）。
-                            // 缓存完整性由下载前的 FileChecker(forge.Hash) 负责。
+                            if (File.Exists(installerAddress))
+                                File.Delete(installerAddress);
                         }
                         catch (Exception ex)
                         {
@@ -2424,7 +2415,8 @@ public static class ModDownloadLib
                             // 清理文件
                             if (installer is not null)
                                 installer.Dispose();
-                            // 同上：installerAddress 已是持久缓存，不删；只清 Legacy 解压中间目录
+                            if (File.Exists(installerAddress))
+                                File.Delete(installerAddress);
                             var unrarDir = Path.Combine(Path.GetDirectoryName(installerAddress), "_unrar");
                             if (Directory.Exists(unrarDir))
                                 ModBase.DeleteDirectory(unrarDir);
