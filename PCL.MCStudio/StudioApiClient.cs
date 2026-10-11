@@ -21,7 +21,7 @@ public sealed record LanInfo(int Port, string Motd);
 
 public sealed record RoomInfo(string Code, string Address, int Port, string Mc, string Loader,
     IReadOnlyList<ModEntry> Mods, int ExpiresIn, ClientPackInfo? ClientPack = null,
-    string Mode = "server", LanInfo? Lan = null, RoomPacks? Packs = null);
+    string Mode = "server", LanInfo? Lan = null);
 
 // ---------------------------------------------------------------- P2P 直连信令
 
@@ -32,22 +32,27 @@ public sealed record RoomInfo(string Code, string Address, int Port, string Mc, 
 /// UpnpPort 为 P1-D 主动端口映射的外部端口（0=路由器不支持或未开启）。
 /// v49.4 池化字段：PunchPorts=池内全部 socket 本地端口，Maps=每 socket 的公网映射（ip:port），
 /// Delta=端口递增步长（0=学不到）；纯转发字段，旧服务端/旧对端不解析（向后兼容）。
+/// Observed（v51 观测回灌）：本端打洞中直接观测到的对端真实端点（ip:port，空=未观测到）。
+/// 纯转发字段，旧服务端/旧对端不解析——让对端学习自身在该方向的真实映射，并作为定向补打目标。
 /// Ver=本端协议版本（v50 起上报；云端双方均 ≥50 才下发房间密钥，旧端回落静态 magic）。</summary>
 public sealed record P2pCandidates(IReadOnlyList<string> V6, string V4, string Nat, int Port,
     IReadOnlyList<string>? V4Lan = null, int PunchPort = 0, IReadOnlyList<int>? PredPorts = null,
     int UpnpPort = 0, IReadOnlyList<int>? PunchPorts = null, IReadOnlyList<string>? Maps = null,
-    int Delta = 0, int Ver = P2pProtocol.Version);
+    int Delta = 0, int Ver = P2pProtocol.Version, string Observed = "");
 
 /// <summary>对方候选（服务器转发的 host/joiner 候选，SrcV4 为服务器观察到的源地址）。
 /// Targeted=True 表示这是 host 为当前加入者单独开路的定向候选（多人 P2P）。
 /// PunchAt 为服务器锚定的同步起打时刻（服务器时钟，0=旧服务端无此字段）。
 /// PredPorts 为对方的端口递增预测窗口（P1-C；空/缺省=旧端或 cone，忽略即可）。
 /// UpnpPort 为对方的主动端口映射外部端口（P1-D；0=无映射，可直连入站）。
-/// v49.4 池化字段：PunchPorts=对端 socket 池本地端口，Maps=对端每 socket 公网映射，Delta=端口步长。</summary>
+/// v49.4 池化字段：PunchPorts=对端 socket 池本地端口，Maps=对端每 socket 公网映射，Delta=端口步长。
+/// Observed（v51 观测回灌）：对端在打洞中观测到的本端真实端点（ip:port，空=对端未观测到）——
+/// 本端据此学习自身在该方向的真实映射，并把匹配的池 socket 作为「热口」优先使用。</summary>
 public sealed record P2pPeer(string Email, IReadOnlyList<string> V6, string V4, string Nat, int Port,
     string SrcV4, bool Targeted = false, IReadOnlyList<string>? V4Lan = null, int PunchPort = 0,
     double PunchAt = 0, IReadOnlyList<int>? PredPorts = null, int UpnpPort = 0,
-    IReadOnlyList<int>? PunchPorts = null, IReadOnlyList<string>? Maps = null, int Delta = 0);
+    IReadOnlyList<int>? PunchPorts = null, IReadOnlyList<string>? Maps = null, int Delta = 0,
+    string Observed = "");
 
 /// <summary>候选交换结果：Peer 为对方最新候选（无=对方尚未上报，调用方可轮询），
 /// Peers 为 role=host 时的全部加入者候选（多人发现），YourV4 为服务器看到的本端公网 v4，
@@ -127,12 +132,9 @@ public sealed class StudioApiClient : IDisposable
     /// lan 为虚拟局域网描述（v48，mode=lan；重复注册携带新端口即热切换）。
     /// hb=true（v50.6.1）注册为心跳房间：云端 TTL 收紧为 180s，须 HeartbeatAsync 每 55s 续期；
     /// 退出即销毁语义由「主动 release + 心跳停 3 分钟自动回收」共同保证；旧服务端忽略该字段。</summary>
-    /// packs 为 v50.8 包身份清单（整合包 + 资源包/光影包/数据包，典型 &lt;1KB）：
-    /// 玩家端据此用 PCL 原生管线装同款包；云端白名单截断存储，旧服务端忽略该字段。
     public async Task<string> RegisterRoomAsync(string room, string mc, string loader,
         IEnumerable<ModEntry> mods, string? ownerToken = null, CancellationToken ct = default,
-        ClientPackInfo? clientPack = null, LanInfo? lan = null, bool hb = false,
-        RoomPacks? packs = null)
+        ClientPackInfo? clientPack = null, LanInfo? lan = null, bool hb = false)
     {
         using var doc = await PostJsonAsync("/v1/rooms",
             new
@@ -143,7 +145,6 @@ public sealed class StudioApiClient : IDisposable
                 mods = mods.Select(m => new { project = m.Project, version = m.Version, filename = m.Filename }),
                 owner_token = ownerToken ?? "",
                 clientpack = clientPack?.ToJson(),
-                packs = packs?.ToJson(),
                 lan = lan is null ? null : new { port = lan.Port, motd = lan.Motd },
                 hb = hb ? (bool?)true : null,
             },
@@ -184,10 +185,6 @@ public sealed class StudioApiClient : IDisposable
         JsonNode? clientpack = null;
         if (doc.RootElement.TryGetProperty("clientpack", out var cp) && cp.ValueKind == JsonValueKind.Object)
             clientpack = JsonNode.Parse(cp.GetRawText());
-        // v50.8：包身份（老服务端/未升级房间无该字段 → null，朋友端回退清单流程）
-        JsonNode? packs = null;
-        if (doc.RootElement.TryGetProperty("packs", out var pk) && pk.ValueKind == JsonValueKind.Object)
-            packs = JsonNode.Parse(pk.GetRawText());
         // v48：lan 描述（老服务端无该字段时缺省 server 模式）
         var mode = doc.RootElement.TryGetProperty("mode", out var md) ? md.GetString() ?? "server" : "server";
         LanInfo? lan = null;
@@ -207,7 +204,7 @@ public sealed class StudioApiClient : IDisposable
             mods,
             doc.RootElement.TryGetProperty("expires_in", out var e) ? e.GetInt32() : 0,
             ClientPackInfo.FromJson(clientpack),
-            mode, lan, RoomPacks.FromJson(packs));
+            mode, lan);
     }
 
     /// <summary>释放房间（删除租约与房间码）。leaseToken 为 allocate 下发的归属凭证
@@ -227,23 +224,15 @@ public sealed class StudioApiClient : IDisposable
 
     // ---------------------------------------------------------------- 玩家账号
 
-    /// <summary>请求邮箱验证码。dev 模式下服务端会直接回传验证码（Code 非空）。</summary>
-    public async Task<SendCodeResult> SendCodeAsync(string email, CancellationToken ct = default)
-    {
-        using var doc = await PostJsonAsync("/v1/auth/sendcode", new { email }, null, ct).ConfigureAwait(false);
-        var r = doc.RootElement;
-        return new SendCodeResult(
-            r.TryGetProperty("dev", out var d) && d.GetBoolean(),
-            r.TryGetProperty("code", out var c) ? c.GetString() : null,
-            r.TryGetProperty("expire_minutes", out var e) ? e.GetInt32() : 10);
-    }
-
-    /// <summary>邮箱注册：验证码校验通过后建号并返回登录令牌。</summary>
-    public async Task<UserIdentity> RegisterAsync(string email, string code, string password,
-        string? nickname = null, CancellationToken ct = default)
+    /// <summary>邮箱注册：建号并返回登录令牌。
+    /// device 为设备识别码，服务端据此限制「一台设备只能注册一个账号」；
+    /// 传空表示本机指纹不可用，服务端会跳过该判定（不因此拒绝注册）。
+    /// nickname 可留空（服务端回落到邮箱前缀），上限 7 个字符且仅用于好友列表显示。</summary>
+    public async Task<UserIdentity> RegisterAsync(string email, string password,
+        string? nickname = null, string device = "", CancellationToken ct = default)
     {
         using var doc = await PostJsonAsync("/v1/auth/register",
-            new { email, code, password, nickname = nickname ?? "" }, null, ct).ConfigureAwait(false);
+            new { email, password, nickname = nickname ?? "", device }, null, ct).ConfigureAwait(false);
         var token = doc.RootElement.GetProperty("token").GetString() ?? "";
         var nick = ReadNestedString(doc.RootElement, "user", "nickname");
         return new UserIdentity(email, string.IsNullOrEmpty(nick) ? email : nick, token);
@@ -358,6 +347,7 @@ public sealed class StudioApiClient : IDisposable
                     punch_ports = candidates.PunchPorts ?? (IReadOnlyList<int>)Array.Empty<int>(),
                     maps = candidates.Maps ?? (IReadOnlyList<string>)Array.Empty<string>(),
                     delta = candidates.Delta,
+                    observed = candidates.Observed,
                     v = candidates.Ver,
                 },
             }, token, ct).ConfigureAwait(false);
@@ -397,6 +387,14 @@ public sealed class StudioApiClient : IDisposable
     public async Task LogoutAllAsync(string token, CancellationToken ct = default)
     {
         using var _ = await PostJsonAsync("/v1/auth/logout-all", new { }, token, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>改显示昵称（≤7 字符，仅用于好友列表显示，不参与查找，不要求唯一）。
+    /// 返回服务端归一化后的最终昵称——可能被截断，调用方应以返回值为准。</summary>
+    public async Task<string> SetNicknameAsync(string token, string nickname, CancellationToken ct = default)
+    {
+        using var doc = await PostJsonAsync("/v1/account/nickname", new { nickname }, token, ct).ConfigureAwait(false);
+        return doc.RootElement.TryGetProperty("nickname", out var n) ? n.GetString() ?? nickname : nickname;
     }
 
     /// <summary>注销账号（v50 M2：密码确认；云端清除 users/sessions/friends/名下房间全链数据）。</summary>
@@ -452,7 +450,8 @@ public sealed class StudioApiClient : IDisposable
             pe.TryGetProperty("upnp_port", out var up) && up.ValueKind == JsonValueKind.Number ? up.GetInt32() : 0,
             punchPorts,
             maps,
-            delta);
+            delta,
+            pe.TryGetProperty("observed", out var ob) ? ob.GetString() ?? "" : "");
     }
 
     private static IReadOnlyList<RoomBrief> ReadBriefList(JsonElement root, string prop)

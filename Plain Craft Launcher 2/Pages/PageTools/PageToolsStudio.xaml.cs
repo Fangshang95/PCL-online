@@ -6,6 +6,7 @@ using System.Windows.Input;
 using PCL.Core.App.Localization;
 using PCL.Core.Minecraft;
 using PCL.Core.UI;
+using PCL.Core.Utils.Secret;
 using PCL.MCStudio;
 
 namespace PCL;
@@ -19,13 +20,9 @@ public partial class PageToolsStudio
     private HostRoomManager? _host;
     private StudioApiClient? _hostApi;
 
-    private readonly DispatcherTimer _cooldownTimer = new() { Interval = System.TimeSpan.FromSeconds(1) };
-    private int _cooldownLeft;
-
     public PageToolsStudio()
     {
         InitializeComponent();
-        _cooldownTimer.Tick += CooldownTimer_Tick;
         Loaded += PageToolsStudio_Loaded;
         ComboHostServer.SelectionChanged += (_, _) => ApplyServerSelection();
         ComboHostClientPack.SelectionChanged += ApplyClientPackSelection;
@@ -478,59 +475,9 @@ public partial class PageToolsStudio
         Show(PanAccountLogin, true);
     }
 
-    private async void BtnSendCode_Click(object sender, MouseButtonEventArgs e)
-    {
-        var email = TxtRegEmail.Text.Trim();
-        if (string.IsNullOrEmpty(email))
-        {
-            HintService.Hint(Lang.Text("Tools.Studio.Hint.EmailRequired"), HintType.Error);
-            return;
-        }
-        using var api = TryGetApi();
-        if (api is null)
-        {
-            HintService.Hint(Lang.Text("Tools.Studio.Hint.NoConfig"), HintType.Error);
-            return;
-        }
-        try
-        {
-            BtnSendCode.IsEnabled = false;
-            var result = await api.SendCodeAsync(email);
-            if (result.Dev && !string.IsNullOrEmpty(result.Code))
-            {
-                TxtRegCode.Text = result.Code;
-                HintService.Hint(Lang.Text("Tools.Studio.Hint.CodeDev"), HintType.Info);
-            }
-            else
-            {
-                HintService.Hint(string.Format(Lang.Text("Tools.Studio.Hint.CodeSent"), result.ExpireMinutes),
-                    HintType.Success);
-            }
-            StartCooldown(60);
-        }
-        catch (StudioApiException ex)
-        {
-            HintService.Hint(ex.StatusCode switch
-            {
-                409 => Lang.Text("Tools.Studio.Hint.AlreadyRegistered"),
-                429 => Lang.Text("Tools.Studio.Hint.TooMany"),
-                400 => Lang.Text("Tools.Studio.Hint.EmailRejected"),
-                503 => Lang.Text("Tools.Studio.Hint.MailDown"),
-                _ => Lang.Text("Tools.Studio.Hint.CodeFailed") + "：" + ex.Message,
-            }, HintType.Error);
-            BtnSendCode.IsEnabled = true;
-        }
-        catch
-        {
-            HintService.Hint(Lang.Text("Tools.Studio.Hint.NetworkError"), HintType.Error);
-            BtnSendCode.IsEnabled = true;
-        }
-    }
-
     private async void BtnRegister_Click(object sender, MouseButtonEventArgs e)
     {
         var email = TxtRegEmail.Text.Trim();
-        var code = TxtRegCode.Text.Trim();
         var nickname = TxtRegNickname.Text.Trim();
         var password = TxtRegPassword.Password;
         if (string.IsNullOrEmpty(email))
@@ -538,9 +485,9 @@ public partial class PageToolsStudio
             HintService.Hint(Lang.Text("Tools.Studio.Hint.EmailRequired"), HintType.Error);
             return;
         }
-        if (code.Length != 6)
+        if (nickname.Length > 7)
         {
-            HintService.Hint(Lang.Text("Tools.Studio.Hint.CodeRequired"), HintType.Error);
+            HintService.Hint(Lang.Text("Tools.Studio.Hint.NicknameTooLong"), HintType.Error);
             return;
         }
         if (password.Length < 8)
@@ -557,12 +504,14 @@ public partial class PageToolsStudio
         try
         {
             BtnRegister.IsEnabled = false;
-            var identity = await api.RegisterAsync(email, code, password,
-                string.IsNullOrEmpty(nickname) ? null : nickname);
+            // 指纹不可信时上报空串：服务端会跳过设备名额判定，绝不因采集失败把人挡在门外
+            var identity = await api.RegisterAsync(email, password,
+                string.IsNullOrEmpty(nickname) ? null : nickname,
+                Identify.Trusted ? Identify.LauncherId : "");
             StudioAccount.Save(identity);
             _me = identity;
             TxtRegPassword.Password = "";
-            TxtRegCode.Text = "";
+            TxtRegNickname.Text = "";
             RefreshAccount();
             StudioSession.ReloadLocal();
             _ = StudioSession.RefreshFriendsAsync();
@@ -574,6 +523,7 @@ public partial class PageToolsStudio
             HintService.Hint(ex.StatusCode switch
             {
                 409 => Lang.Text("Tools.Studio.Hint.AlreadyRegistered"),
+                403 => Lang.Text("Tools.Studio.Hint.DeviceLimited"),
                 429 => Lang.Text("Tools.Studio.Hint.TooMany"),
                 400 => Lang.Text("Tools.Studio.Hint.RegisterRejected") + "：" + ex.Message,
                 _ => Lang.Text("Tools.Studio.Hint.RegisterFailed") + "：" + ex.Message,
@@ -598,27 +548,6 @@ public partial class PageToolsStudio
         RefreshAccount();
         StudioSession.ReloadLocal();
         HintService.Hint(Lang.Text("Tools.Studio.Hint.LogoutOk"), HintType.Info);
-    }
-
-    private void StartCooldown(int seconds)
-    {
-        _cooldownLeft = seconds;
-        BtnSendCode.IsEnabled = false;
-        BtnSendCode.Text = string.Format(Lang.Text("Tools.Studio.Account.SendCodeCooldown"), _cooldownLeft);
-        _cooldownTimer.Start();
-    }
-
-    private void CooldownTimer_Tick(object? sender, System.EventArgs e)
-    {
-        _cooldownLeft--;
-        if (_cooldownLeft > 0)
-        {
-            BtnSendCode.Text = string.Format(Lang.Text("Tools.Studio.Account.SendCodeCooldown"), _cooldownLeft);
-            return;
-        }
-        _cooldownTimer.Stop();
-        BtnSendCode.Text = Lang.Text("Tools.Studio.Account.SendCode");
-        BtnSendCode.IsEnabled = true;
     }
 
     // ---------------------------------------------------------------- 好友
@@ -1104,10 +1033,6 @@ public partial class PageToolsStudio
         var serverDir = Path.Combine(env.ServerRoot, roomSlug);
         // v44 客户端整合包：随房间注册上云，朋友加入时整包下载安装
         var clientPack = ResolveClientPack(mc, loader);
-        // v50.8 包身份：整合包 + 资源包/光影包/数据包（<1KB）。玩家端据此用 PCL 原生管线装同款，
-        // 房主端零文件上传。不 ConfigureAwait(false)——后续要回 UI 线程更新控件
-        var packs = await HostPackCollector.CollectOrNullAsync(
-            ModInstanceList.McMcInstanceSelected?.PathInstance);
 
         try
         {
@@ -1128,8 +1053,6 @@ public partial class PageToolsStudio
                 RoomName = roomSlug,
                 SkipSeed = _serverProfile is not null,   // 重开档案：跳过暂存区播种，防误灌其他整合包
                 ClientPack = clientPack,                 // v44 客户端整合包随房间上云
-                ClientInstanceDir = ModInstanceList.McMcInstanceSelected?.PathInstance,   // v50.7 全类型清单来源
-                Packs = packs,                           // v50.8 包身份（玩家端原生装同款）
             }, progress);
             // 只显示房间码：连接地址/端口不再对外暴露，玩家只能走启动器一键加入（P2P 优先）
             TxtHostStatus.Text = string.Format(

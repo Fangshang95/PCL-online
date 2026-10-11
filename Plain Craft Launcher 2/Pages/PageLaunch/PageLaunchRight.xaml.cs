@@ -778,10 +778,6 @@ public partial class PageLaunchRight : IRefreshable
         var serverDir = Path.Combine(env.ServerRoot, roomSlug);
         // v44 客户端整合包：随房间注册上云，朋友加入时整包下载安装
         var clientPack = ResolveClientPack(mc, loader);
-        // v50.8 包身份：整合包 + 资源包/光影包/数据包（<1KB）。玩家端据此用 PCL 原生管线装同款，
-        // 房主端零文件上传。不 ConfigureAwait(false)——后续要回 UI 线程更新控件
-        var packs = await HostPackCollector.CollectOrNullAsync(
-            ModInstanceList.McMcInstanceSelected?.PathInstance);
 
         try
         {
@@ -801,8 +797,6 @@ public partial class PageLaunchRight : IRefreshable
                 RoomName = roomSlug,
                 SkipSeed = _serverProfile is not null,   // 重开档案：跳过暂存区播种，防误灌其他整合包
                 ClientPack = clientPack,                 // v44 客户端整合包随房间上云
-                ClientInstanceDir = ModInstanceList.McMcInstanceSelected?.PathInstance,   // v50.7 全类型清单来源
-                Packs = packs,                           // v50.8 包身份（玩家端原生装同款）
             }, progress);
             // 只显示房间码：连接地址/端口不再对外暴露，玩家只能走启动器一键加入（P2P 优先）
             TxtHostStatus.Text = string.Format(

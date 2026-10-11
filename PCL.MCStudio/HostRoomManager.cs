@@ -30,12 +30,6 @@ public sealed record HostOptions
     public bool SkipSeed { get; init; }
     /// <summary>客户端整合包（v44）：随房间注册上云，朋友加入时整包下载安装；local 包仅本机可用。</summary>
     public ClientPackInfo? ClientPack { get; init; }
-    /// <summary>房主客户端实例根目录（v50.7 全类型对齐）：扫 resourcepacks/shaderpacks/datapacks
-    /// 进精确清单，朋友端自动对齐；空=只按服务端 mods 目录生成（与 v50.6.9 行为一致）。</summary>
-    public string? ClientInstanceDir { get; init; }
-    /// <summary>v50.8 包身份：整合包 + 资源包/光影包/数据包身份（&lt;1KB）。玩家端据此用 PCL 原生
-    /// 下载/安装管线装同款包；与 ClientPack 的逐文件清单互不排斥（识别得出走包级，散件仍由清单兜底）。</summary>
-    public RoomPacks? Packs { get; init; }
 }
 
 public enum HostStep { Preparing, ServerJar, Starting, WaitingDone, Tunnel, Register, Running, Stopping }
@@ -344,11 +338,11 @@ public sealed class HostRoomManager : IDisposable
                 Size = clientPack.Size > 0 ? clientPack.Size : new FileInfo(cache).Length,
             };
         }
-        // v50.9.4：逐文件清单（v50.6.9/v50.7 mrpack index）整体移除——对齐只走包身份（options.Packs）
-        // + 加入端自动装配兜底；云载荷从 O(文件数) 变为常数 <1KB，64KB 拒绝式问题不复存在
+        // v50.9.4：逐文件清单（v50.6.9/v50.7 mrpack index）整体移除；v50.11.12 起包身份对齐机制亦移除，
+        // 房间只携带显式提供的客户端整合包（clientPack），云载荷从 O(文件数) 变为常数
         var code = await _api.RegisterRoomAsync(room, mc, registeredLoader, ReadMods(meta),
             string.IsNullOrEmpty(options.OwnerToken) ? null : options.OwnerToken, ct,
-            clientPack, hb: true, packs: options.Packs).ConfigureAwait(false);
+            clientPack, hb: true).ConfigureAwait(false);
         var address = $"{_frpsHost}:{remotePort}";
 
         _current = new HostedRoom(room, code, address, remotePort, port, dir, mc, registeredLoader);
@@ -1259,8 +1253,8 @@ public sealed class HostRoomManager : IDisposable
         }
     }
 
-    // v50.9.4：WithMrpackIndexAsync（v50.6.9/v50.7 逐文件清单生成）已随清单通道整体移除——
-    // 对齐只走包身份（RoomPacks）+ 加入端自动装配兜底（StudioSession.AutoAssembleLocalPackAsync）。
+    // v50.9.4：WithMrpackIndexAsync（v50.6.9/v50.7 逐文件清单生成）已随清单通道整体移除；
+    // v50.11.12：包身份对齐（RoomPacks）与加入端自动装配兜底亦整体移除——房间只携带显式客户端整合包。
 
     /// <summary>v50.6.5：MC 服务端 TCP 入站放行（端口级规则，profile=any）。
     /// 背景：IPv6 直连 = joiner 对房主 [v6]:mcPort 的 TCP 直通；手机热点等场景 Windows

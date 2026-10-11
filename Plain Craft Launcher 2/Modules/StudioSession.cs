@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Text.Json.Nodes;
@@ -410,7 +410,7 @@ public static class StudioSession
         {
             if (_me is null && p2pMode == P2pMode.DirectOnly)
             {
-                P2pTrace.End("joiner", "no-login", $"房间 {code} 直连模式需要登录，已失败");
+                P2pTrace.End("joiner", "no-login", $"房间 {code} 直连模式需要登录，已失败", phase: "outer");
                 throw new InvalidOperationException("P2P 直连需要先登录账号（信令鉴权）");
             }
             if (_me is null)
@@ -423,8 +423,8 @@ public static class StudioSession
                 P2pAttempt? p2p = null;
                 try
                 {
-                    // v50.6.7 relay-first：中继上游秒级就绪（0 等待进服），后台打洞打通后升级直连；
-                    // 仅直连模式不预建中继（保持原同步打洞语义）
+                    // v51 A1 直连优先：先在有界预算内跑完整直连链，成功即零中转、不建中继；
+                    // 预算内失败才用中继兜底（仅直连模式不预建中继，保持原同步打洞语义）
                     p2p = await P2pTunnel.JoinerTryAsync(api, _me.Token, code,
                         p2pMode == P2pMode.DirectOnly ? null : info.Address, p2pLog,
                         CancellationToken.None).ConfigureAwait(true);
@@ -440,23 +440,24 @@ public static class StudioSession
                 {
                     P2pTrace.End("joiner",
                         p2p.Kind == P2pRouteKind.V6 ? "v6"
-                        : p2p.Kind == P2pRouteKind.Relay ? "relay-first"
+                        : p2p.Kind == P2pRouteKind.Relay ? "relay"
                         : "udp",
-                        $"线路 {p2p.LocalAddress}（外层终局，过程明细见上方 result 行）");
+                        $"线路 {p2p.LocalAddress}（外层终局，直连尝试明细见上方 phase=inner 行）",
+                        phase: "outer");
                     info = info with { Address = p2p.LocalAddress };
                     progress.Report(new AssembleProgress(AssembleStep.Resolving,
-                        p2p.Kind == P2pRouteKind.V6 ? "IPv6 直连已建立 · " + p2p.LocalAddress
-                        : p2p.Kind == P2pRouteKind.Relay ? "中继线路已就绪（后台升级直连中） · " + p2p.LocalAddress
-                        : "P2P 打洞成功 · " + p2p.LocalAddress));
+                        p2p.Kind == P2pRouteKind.V6 ? "IPv6 直连已建立（零中转） · " + p2p.LocalAddress
+                        : p2p.Kind == P2pRouteKind.Relay ? "直连未打通，已用中继兜底（后台重试直连中） · " + p2p.LocalAddress
+                        : "P2P 打洞成功，走直连（零中转） · " + p2p.LocalAddress));
                 }
                 else
                 {
                     if (p2pMode == P2pMode.DirectOnly)
                     {
-                        P2pTrace.End("joiner", "direct-only-fail", $"房间 {code} 仅直连模式不回退中转");
+                        P2pTrace.End("joiner", "direct-only-fail", $"房间 {code} 仅直连模式不回退中转", phase: "outer");
                         throw new InvalidOperationException("P2P 直连未成功（仅直连模式不回退中转）");
                     }
-                    P2pTrace.End("joiner", "relay-fallback", "P2P 未打通，已回退 frp 中转（2MB/s 限速）");
+                    P2pTrace.End("joiner", "relay-fallback", "P2P 未打通，已回退 frp 中转（2MB/s 限速）", phase: "outer");
                     progress.Report(new AssembleProgress(AssembleStep.Resolving,
                         "P2P 未打通，使用中转线路（免费通道限速 2MB/s，人多或大地图时可能卡顿）"));
                 }
@@ -703,20 +704,8 @@ public static class StudioSession
                         "客户端整合包下载失败：" + (last?.Message ?? "未知错误") + "\n请检查网络后重试。", last);
             }
 
-            // 3) 无包可用 → v50.9.3 自动装配兜底（packs 身份下载 / 合成基础客户端），失败再「选择本机实例」
-            if (local is null)
-            {
-                var auto = await AutoAssembleLocalPackAsync(info, progress).ConfigureAwait(true);
-                if (auto is not null)
-                {
-                    local = auto.Value.Path;
-                    instName = auto.Value.InstName;
-                    instDir = Path.Combine(GetMcFolder(), "versions", instName);
-                    marker = Path.Combine(instDir, ".mcstudio-pack");
-                }
-            }
-
-            // 3.1) 自动装配也未成功 → 「选择本机实例」绑定，取消则不加入
+            // 3) 无包可用 → 「选择本机实例」绑定，取消则不加入
+            // v50.11.12：移除 v50.9.3 自动装配兜底（包身份对齐机制已整体移除，不再按身份自动拉取同款整合包）
             if (local is null)
             {
                 var bound = await PickLocalInstanceForJoinAsync(info, cp, markerKey, instDir, progress)
@@ -818,173 +807,6 @@ public static class StudioSession
             }
             return "";
         }
-
-    /// <summary>
-    /// v50.9.3 自动装配兜底（加入端，补齐 v50.8 玩家端安装）：房间清单/客户端包全部不可用时按序尝试——
-    /// a) packs.modpack 为 Modrinth 身份（房主 v50.9+ 随房下发）→ 版本接口取主文件直链，下载官方
-    ///    mrpack 全量安装（含 overrides，真·同款）；
-    /// b) packs.modpack 为 CurseForge 身份 → CF web 直链尝试（302 到 CDN，失败不阻塞）；
-    /// c) 合成零文件 mrpack（dependencies = mc + loader）→ 走 PCL 原生 McInstallLoader 安装链
-    ///    自动装出匹配版本的基础客户端。fabric 缺 loader 版本时取最新（loader 版本对模组兼容
-    ///    影响小）；forge/neo 缺版本无法安全合成 → 放弃（装出坏实例比不装更糟）。
-    /// 任一成功返回 (包路径, 实例名)；全部失败返回 null（回落「选择本机实例」）。
-    /// </summary>
-    private static async Task<(string Path, string InstName)?> AutoAssembleLocalPackAsync(
-        RoomInfo info, IProgress<AssembleProgress> progress)
-    {
-        var root = ClientPackInfo.ClientPackRoot();
-        Directory.CreateDirectory(root);
-
-        // a/b) 房间包身份自动下载（v50.8 玩家端安装）
-        var mp = info.Packs?.Modpack;
-        if (mp is not null && mp.Vid.Length > 0 && mp.Pid.Length > 0)
-        {
-            var key = ClientPackInfo.Sha1Hex(mp.Pid + "|" + mp.Vid);
-            if (mp.Src == "modrinth")
-            {
-                try
-                {
-                    progress.Report(new AssembleProgress(AssembleStep.PackDownload,
-                        $"自动匹配房主整合包《{(mp.Name.Length > 0 ? mp.Name : mp.Pid)}》…"));
-                    var ver = await McSources.GetJsonAsync(
-                        $"{McSources.ModrinthApi}/version/{Uri.EscapeDataString(mp.Vid)}").ConfigureAwait(true);
-                    if (ver["files"] is not JsonArray fs || fs.Count == 0)
-                        throw new InvalidOperationException("Modrinth 版本无可用文件");
-                    JsonObject pick = null;
-                    foreach (var f in fs)
-                        if (f is JsonObject o && o["primary"]?.GetValue<bool>() == true) { pick = o; break; }
-                    pick ??= (JsonObject)fs[0]!;
-                    var url = pick["url"]?.GetValue<string>()
-                        ?? throw new InvalidOperationException("Modrinth 版本文件缺少下载地址");
-                    var sha1 = pick["hashes"]?["sha1"]?.GetValue<string>();
-                    var ext = (pick["filename"]?.GetValue<string>() ?? "")
-                        .EndsWith(".mrpack", StringComparison.OrdinalIgnoreCase) ? ".mrpack" : ".zip";
-                    CheckDiskSpace(root, pick["size"]?.GetValue<long>() ?? 0);
-                    var target = Path.Combine(root, "packs-" + key[..12] + ext);
-                    Exception last = null;
-                    for (var attempt = 1; attempt <= 3 && !File.Exists(target); attempt++)
-                    {
-                        if (attempt > 1)
-                        {
-                            progress.Report(new AssembleProgress(AssembleStep.PackDownload,
-                                $"下载失败，第 {attempt} 次重试…"));
-                            await Task.Delay(TimeSpan.FromSeconds(5 * attempt)).ConfigureAwait(true);
-                        }
-                        try
-                        {
-                            await McSources.DownloadFileAsync(new[] { url }, target + ".part",
-                                CancellationToken.None, sha1,
-                                new Progress<(long Done, long Total)>(t => progress.Report(
-                                    new AssembleProgress(AssembleStep.PackDownload,
-                                        t.Total > 0
-                                            ? $"下载整合包 {t.Done / 1048576.0:F0}/{t.Total / 1048576.0:F0} MB"
-                                            : $"下载整合包 {t.Done / 1048576.0:F0} MB")))).ConfigureAwait(true);
-                            if (File.Exists(target)) File.Delete(target);
-                            File.Move(target + ".part", target);
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex) { last = ex; try { File.Delete(target + ".part"); } catch { } }
-                    }
-                    if (!File.Exists(target))
-                        throw new InvalidOperationException("整合包下载失败：" + (last?.Message ?? "未知错误"));
-                    return (target, "mcstudio-pack-" + key[..7]);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    ModBase.Log("[MCStudio] Modrinth 整合包自动匹配失败：" + ex.Message);
-                }
-            }
-            else if (mp.Src == "curseforge")
-            {
-                try
-                {
-                    progress.Report(new AssembleProgress(AssembleStep.PackDownload,
-                        $"自动匹配房主整合包（CurseForge #{mp.Pid}）…"));
-                    var url = $"https://www.curseforge.com/api/v1/mods/{mp.Pid}/files/{mp.Vid}/download";
-                    var target = Path.Combine(root, "packs-" + key[..12] + ".zip");
-                    Exception last = null;
-                    for (var attempt = 1; attempt <= 3 && !File.Exists(target); attempt++)
-                    {
-                        if (attempt > 1)
-                            await Task.Delay(TimeSpan.FromSeconds(5 * attempt)).ConfigureAwait(true);
-                        try
-                        {
-                            await McSources.DownloadFileAsync(new[] { url }, target + ".part",
-                                CancellationToken.None, null, null).ConfigureAwait(true);
-                            if (File.Exists(target)) File.Delete(target);
-                            File.Move(target + ".part", target);
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex) { last = ex; try { File.Delete(target + ".part"); } catch { } }
-                    }
-                    if (!File.Exists(target))
-                        throw new InvalidOperationException("整合包下载失败：" + (last?.Message ?? "未知错误"));
-                    return (target, "mcstudio-pack-" + key[..7]);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    ModBase.Log("[MCStudio] CurseForge 整合包自动匹配失败：" + ex.Message);
-                }
-            }
-        }
-
-        // c) 合成零文件 mrpack → 基础客户端（vanilla + loader，PCL 原生安装链）
-        var (lk, lv) = info.Loader.Contains(':')
-            ? (info.Loader[..info.Loader.IndexOf(':')],
-               info.Loader[(info.Loader.IndexOf(':') + 1)..])
-            : (info.Loader, "");
-        var deps = new JsonObject { ["minecraft"] = info.Mc };
-        var loaderText = "";
-        if (lk == "fabric")
-        {
-            var fabricVer = lv;
-            if (string.IsNullOrEmpty(fabricVer))
-            {
-                try { fabricVer = (await McSources.GetFabricVersionsAsync().ConfigureAwait(true)).Loader; }
-                catch (Exception ex)
-                {
-                    ModBase.Log("[MCStudio] 获取 Fabric 最新版失败，放弃合成基础客户端：" + ex.Message);
-                    return null;
-                }
-            }
-            deps["fabric-loader"] = fabricVer;
-            loaderText = " · Fabric " + fabricVer;
-        }
-        else if ((lk == "forge" || lk == "neoforge") && lv.Length > 0)
-        {
-            deps[lk] = lv;
-            loaderText = " · " + lk + " " + lv;
-        }
-        else if (lk != "vanilla")
-        {
-            return null;    // forge/neo 缺 loader 版本：无法安全合成
-        }
-        var nometaKey = ClientPackInfo.Sha1Hex($"nometa:{info.Mc}:{info.Loader}");
-        progress.Report(new AssembleProgress(AssembleStep.PackDownload,
-            $"本机无匹配实例，正在自动安装基础客户端：Minecraft {info.Mc}{loaderText}" +
-            "（不含房主模组：房主用整合包开房时，朋友端将自动安装同款整合包）"));
-        var mrpack = Path.Combine(root, "index-nometa-" + nometaKey[..12] + ".mrpack");
-        if (!File.Exists(mrpack))
-        {
-            var index = new JsonObject
-            {
-                ["formatVersion"] = 1,
-                ["game"] = "minecraft",
-                ["name"] = "MCStudio 基础客户端 " + info.Mc,
-                ["versionId"] = "nometa",
-                ["files"] = new JsonArray(),
-                ["dependencies"] = deps,
-            };
-            using var fs2 = File.Create(mrpack);
-            using var zip = new ZipArchive(fs2, ZipArchiveMode.Create);
-            var entry = zip.CreateEntry("modrinth.index.json");
-            using var w = new StreamWriter(entry.Open());
-            w.Write(index.ToJsonString());
-        }
-        return (mrpack, "mcstudio-pack-nometa-" + nometaKey[..7]);
-    }
 
     /// <summary>
     /// 「选择本机实例」绑定（v46）：无包可用时列出与房间版本/加载器匹配的本机实例，选中即写
@@ -1255,14 +1077,10 @@ public static class StudioSession
                     _lanSession = session;
                     // v50.9.13：桥接阶段进度（建立隧道/注册房间/端口切换…）转发到状态行
                     session.Progress += p => status.Report(p);
-                    // v50.6.9：附带房主实例 mods 目录——精确清单生成来源（sha1 反查 Modrinth）
-                    // v50.7：再传实例根目录——resourcepacks/shaderpacks/datapacks 一并进清单（全类型对齐）
-                    // v50.8：包身份随房下发——玩家端据此用 PCL 原生管线装同款包
-                    var packs = await HostPackCollector.CollectOrNullAsync(inst.PathInstance)
-                        .ConfigureAwait(false);
-                    // v50.9.4：不再传 modsDir/clientInstanceDir（逐文件清单通道已移除）
+                    // v50.9.4：逐文件清单通道移除；v50.11.12：包身份对齐移除。
+                    // 房间只携带 mods 清单用于版本匹配，不再采集/下发任何包身份。
                     await session.BridgeAsync(world, mc, loader, mods, _me!.Token,
-                        CancellationToken.None, packs).ConfigureAwait(false);
+                        CancellationToken.None).ConfigureAwait(false);
                     status.Report($"✅ 虚拟局域网就绪：房间码 {session.RoomCode} · 世界《{motd}》" +
                                   "（把房间码发给好友一键加入）");
                 }

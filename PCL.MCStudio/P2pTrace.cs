@@ -7,7 +7,8 @@ namespace PCL.MCStudio;
 /// 便于离线复盘「P2P 为什么没打通」。按天滚动 {exe}\mcstudio\logs\p2p-yyyyMMdd.log，
 /// UTF-8 追加写；任何 I/O 失败静默（不影响主流程）。
 /// 行格式：HH:mm:ss.fff 内容；会话以「────」分隔块开头，终局 result 与埋点口径一致
-/// （v6 / lan / udp / no_peer / skipped / timeout / relay-fallback / relay …）。
+/// （v6 / lan / udp / no_peer / skipped / timeout / relay-fallback / relay …），
+/// 并以 phase 区分统计口径：outer=会话层最终线路，inner=直连尝试结果。
 /// </summary>
 public static class P2pTrace
 {
@@ -20,9 +21,11 @@ public static class P2pTrace
     /// <summary>过程行：NAT 判定、候选逐个尝试、打洞窗口、决策原因等。</summary>
     public static void Log(string line) => Write(line);
 
-    /// <summary>会话终局：result 与埋点口径一致；detail 补充耗时 / 线路地址。</summary>
-    public static void End(string role, string result, string detail = "")
-        => Write($"──── P2P 终局 [{role}] result={result}{(string.IsNullOrEmpty(detail) ? "" : " · " + detail)}");
+    /// <summary>会话终局：result 与埋点口径一致；detail 补充耗时 / 线路地址。
+    /// phase 区分统计口径——outer=会话层最终线路（中继就绪 / 回退 frp），inner=直连尝试结果。
+    /// 两者混算会把「中继已就绪、后台打洞失败」误计为连接失败，得出打洞成功率虚低的假象。</summary>
+    public static void End(string role, string result, string detail = "", string phase = "")
+        => Write($"──── P2P 终局 [{role}] result={result}{(string.IsNullOrEmpty(phase) ? "" : " phase=" + phase)}{(string.IsNullOrEmpty(detail) ? "" : " · " + detail)}");
 
     private static void Write(string line)
     {

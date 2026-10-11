@@ -403,21 +403,18 @@ public sealed class LanHostSession : IDisposable
         _token = frpsToken;
     }
 
-    /// <summary>桥接一个世界（幂等 + 热切换）。mc/loader/mods 用于房间注册与朋友端版本匹配；
-    /// packs 为 v50.8 包身份（整合包 + 资源类身份，&lt;1KB），随房间下发供玩家端原生安装同款。
-    /// v50.9.4：逐文件清单（v50.6.9/v50.7 的 mrpack index）整体移除——对齐只走包身份 + 加入端
-    /// 自动装配兜底（AutoAssembleLocalPackAsync），云载荷从 O(文件数) 变为常数 &lt;1KB。</summary>
+    /// <summary>桥接一个世界（幂等 + 热切换）。mc/loader/mods 用于房间注册与朋友端版本匹配。
+    /// v50.9.4：逐文件清单（v50.6.9/v50.7 的 mrpack index）整体移除；v50.11.12：包身份对齐
+    /// 与加入端自动装配兜底亦移除，房间只携带显式客户端整合包，云载荷为常数。</summary>
     public async Task BridgeAsync(LanWorldInfo world, string mc, string loader,
-        IReadOnlyList<ModEntry> mods, string? ownerToken, CancellationToken ct,
-        RoomPacks? packs = null)
+        IReadOnlyList<ModEntry> mods, string? ownerToken, CancellationToken ct)
     {
         var old = _bridged;
         if (old is not null && old.Port == world.Port && _code is not null)
         {
             // 同端口重复捕获：只刷新注册（motd 可能变化），不动隧道
             await _api.RegisterRoomAsync(RoomName(), mc, loader, mods,
-                ownerToken, ct, lan: new LanInfo(world.Port, world.Motd), hb: true,
-                packs: packs).ConfigureAwait(false);
+                ownerToken, ct, lan: new LanInfo(world.Port, world.Motd), hb: true).ConfigureAwait(false);
             StartHeartbeat(ownerToken);
             _bridged = world;
             return;
@@ -443,11 +440,11 @@ public sealed class LanHostSession : IDisposable
         }
 
         // 注册/更新房间（mode=lan；同房间码幂等）+ P2P 服务（端口热取）
-        // v50.9.4：不再生成/下发逐文件清单；无包身份时朋友端走自动装配兜底装基础客户端
+        // v50.11.12：不再生成/下发逐文件清单或包身份，房间只携带显式客户端整合包
         Progress?.Invoke("注册虚拟局域网房间…");
         _code = await _api.RegisterRoomAsync(RoomName(), mc, loader, mods,
             ownerToken, ct, lan: new LanInfo(world.Port, world.Motd),
-            hb: true, packs: packs).ConfigureAwait(false);
+            hb: true).ConfigureAwait(false);
         StartHeartbeat(ownerToken);
         if (_p2p is null && !string.IsNullOrEmpty(ownerToken))
         {

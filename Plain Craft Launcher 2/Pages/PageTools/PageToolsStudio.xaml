@@ -44,22 +44,14 @@
                     <StackPanel x:Name="PanAccountRegister" Visibility="Collapsed" Orientation="Vertical">
                         <local:MyTextBox x:Name="TxtRegEmail" Margin="0,14,0,0"
                                          HintText="{DynamicResource Tools.Studio.Account.EmailHint}" />
-                        <Grid Margin="0,8,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <local:MyTextBox x:Name="TxtRegCode" Grid.Column="0" MaxLength="6"
-                                             HintText="{DynamicResource Tools.Studio.Account.CodeHint}" />
-                            <local:MyButton x:Name="BtnSendCode" Grid.Column="1" MinWidth="130" Margin="15,0,0,0"
-                                            Text="{DynamicResource Tools.Studio.Account.SendCode}"
-                                            Click="BtnSendCode_Click" />
-                        </Grid>
-                        <local:MyTextBox x:Name="TxtRegNickname" Margin="0,8,0,0" MaxLength="24"
+                        <local:MyTextBox x:Name="TxtRegNickname" Margin="0,8,0,0" MaxLength="7"
                                          HintText="{DynamicResource Tools.Studio.Account.NicknameHint}" />
                         <PasswordBox x:Name="TxtRegPassword" Margin="0,8,0,0" />
                         <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" FontSize="12" Opacity="0.7"
                                    Text="{DynamicResource Tools.Studio.Account.PasswordTip}"
+                                   Style="{StaticResource BasedOnTextBlock}" />
+                        <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="12" Opacity="0.7"
+                                   Text="{DynamicResource Tools.Studio.Account.DevicePrivacyTip}"
                                    Style="{StaticResource BasedOnTextBlock}" />
                         <Grid Margin="0,14,0,0">
                             <Grid.ColumnDefinitions>

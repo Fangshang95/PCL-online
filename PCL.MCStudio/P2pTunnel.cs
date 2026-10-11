@@ -140,6 +140,13 @@ public static class P2pTunnel
     private const int ConvId = 0x4D435050; // "MCPP"
     private const string MagicPrefix = "MCP2P|";
 
+    /// <summary>v51 会话结束哨兵：加入端 MC 客户端断开后，用它作为候选 nat 上报（v4 置空），
+    /// 房主端主循环轮询读到即拆除该路直连。原因：KCP 无 wire 级 FIN（KcpSharp 的
+    /// SetTransportClosed 仅本地生效），房主端无法感知对端离开；不拆则其 MC 服务器连接
+    /// 变成僵尸，对方重连时会话复用同一条流 → 客户端 Netty 报
+    /// "Pipeline has no inbound protocol configured"。纯转发字段（nat 自由字符串），旧端不解析。</summary>
+    internal const string NatSessionClosed = "closed";
+
     /// <summary>v50 M6：房间级握手 magic。secret 非空时以 HMAC-SHA256(secret, 房间码)
     /// 派生（双方从信令各拿到同一 secret，无需预先共享），空则回落旧静态 magic（旧端兼容）。
     /// 房间码统一大写——加入端可能传原始大小写，两侧不统一会导致派生值不一致、打洞静默失败。</summary>
@@ -188,16 +195,75 @@ public static class P2pTunnel
     /// <summary>公共 STUN 开关（回环测试置 MCSTUDIO_PUBSTUN=0 跳过，避免公网映射污染端口保持性判定）。</summary>
     private static readonly bool UsePublicStun = Environment.GetEnvironmentVariable("MCSTUDIO_PUBSTUN") != "0";
 
-    /// <summary>v49.4 打洞 socket 池大小（默认 12，MCSTUDIO_PUNCHSOCKETS 可覆盖 2-24）。
-    /// 每个 socket 独立 NAT 映射：cone 侧=12 个稳定可直达端口（对端直达任一即胜），
-    /// 对称侧=12 路端口预留在对端扫描窗内，命中面较 v49 双 socket 大幅提升。</summary>
+    /// <summary>B2 打洞 socket 池大小（默认 24，MCSTUDIO_PUNCHSOCKETS 可覆盖 2-24）。
+    /// 每个 socket 独立 NAT 映射：cone 侧=24 个稳定可直达端口（对端直达任一即胜），
+    /// 对称侧=24 路端口预留在对端扫描窗内，命中面较 v49 双 socket 大幅提升。
+    /// 默认由 12 提到上限 24：探测包一次性翻倍，但保活间隔 2.5s→15s 使稳态包量降 6 倍，净负载接近持平。</summary>
     private static readonly int PunchSocketCount = LoadPunchSocketCount();
 
     private static int LoadPunchSocketCount()
     {
         var raw = Environment.GetEnvironmentVariable("MCSTUDIO_PUNCHSOCKETS");
-        return int.TryParse(raw, out var n) && n >= 2 && n <= 24 ? n : 12;
+        return int.TryParse(raw, out var n) && n >= 2 && n <= 24 ? n : 24;
     }
+
+    /// <summary>A1 直连优先预算（默认 15s，MCSTUDIO_DIRECTBUDGETMS 可覆盖 1–60s）：
+    /// 加入房间时先在此预算内跑完整直连链（IPv6 → UPnP 映射 → UDP 打洞），成功即零中转；
+    /// 超预算才落中继兜底。预算需覆盖「NAT 探测 + 信令 + 喷洒打洞窗口」（B2/B5 的窗口最长 12s），
+    /// 过短会把对称组合的打洞窗口提前掐断，反而推高 frp 使用率。</summary>
+    private static readonly int DirectBudgetMs = LoadDirectBudget();
+
+    private static int LoadDirectBudget()
+    {
+        var raw = Environment.GetEnvironmentVariable("MCSTUDIO_DIRECTBUDGETMS");
+        return int.TryParse(raw, out var n) && n >= 1000 && n <= 60000 ? n : 15000;
+    }
+
+    /// <summary>B2 喷洒目标预算：cone×cone 无需喷洒（72）；涉对称 256（生日悖论约 64% 命中）；
+    /// 双对称 512（追高，约 90%）。可用 MCSTUDIO_SPRAY_SYM / MCSTUDIO_SPRAY_DUALSYM 覆盖。</summary>
+    private static readonly int SprayTargetsSym = LoadIntEnv("MCSTUDIO_SPRAY_SYM", 256, 72, 1024);
+    private static readonly int SprayTargetsDualSym = LoadIntEnv("MCSTUDIO_SPRAY_DUALSYM", 512, 128, 2048);
+
+    /// <summary>B2 彩票口扩窗速率上限（每秒新增随机端口数，默认 150；MCSTUDIO_PUNCHPPS 可覆盖）——
+    /// 喷洒规模放大后，靠它把「随机彩票口」的累计增速限住，避免持续泛洪。
+    /// 注意：它约束的是彩票口的增长速度（每次刷新新增 ≤ PunchPps×1.5s 个），
+    /// 稳态结构化目标的发包量由分片轮转决定（sockets×16/180ms），不在本上限内。</summary>
+    private static readonly int PunchPps = LoadIntEnv("MCSTUDIO_PUNCHPPS", 150, 40, 2000);
+
+    /// <summary>B2 彩票口扩窗半径（默认 160，MCSTUDIO_LOTTERYSPAN 可覆盖）。</summary>
+    private static readonly int LotterySpan = LoadIntEnv("MCSTUDIO_LOTTERYSPAN", 160, 16, 4096);
+
+    /// <summary>v51 观测回灌观测窗（默认 1200ms，MCSTUDIO_OBSERVE_MS 可覆盖）：涉对称组合下，
+    /// 打洞先跑一个短观测窗（confirmOnly 只观测不提交）收集对端真实端点并回灌信令，
+    /// 再做定向补打；cone×cone 不走此路（快路径不变）。</summary>
+    private static readonly int ObserveWindowMs = LoadIntEnv("MCSTUDIO_OBSERVE_MS", 1200, 300, 5000);
+
+    /// <summary>B1 保活间隔（默认 15s，MCSTUDIO_KEEPALIVE_MS 可覆盖）：RFC 4787 要求 UDP 映射
+    /// 空闲存活 ≥2 分钟、推荐 5 分钟，原 2.5s 比需要激进约 50 倍，且持续推进 NAT 分配计数器、
+    /// 与端口预测互相打架。</summary>
+    private static readonly int NatKeepAliveMs = LoadIntEnv("MCSTUDIO_KEEPALIVE_MS", 15000, 2000, 120000);
+
+    private static int LoadIntEnv(string name, int def, int min, int max)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(raw, out var n) && n >= min && n <= max ? n : def;
+    }
+
+    /// <summary>A4 隧道空闲保留（默认 10 分钟，MCSTUDIO_IDLEMINUTES 可覆盖）：
+    /// MC 退出后隧道与 NAT 映射保留该时长（期间 keep-alive 维持映射），保留期内再次进入
+    /// 同房间直接复用（一次打洞多次复用）；超时释放。RFC 4787 要求 UDP 映射空闲存活 ≥2 分钟、
+    /// 推荐 5 分钟，取 10 分钟留余量。</summary>
+    private static readonly TimeSpan IdleRetention = LoadIdleRetention();
+
+    private static TimeSpan LoadIdleRetention()
+    {
+        var raw = Environment.GetEnvironmentVariable("MCSTUDIO_IDLEMINUTES");
+        var minutes = double.TryParse(raw, out var m) && m > 0 && m <= 240 ? m : 10;
+        return TimeSpan.FromMinutes(minutes);
+    }
+
+    /// <summary>A4 进程级复用缓存：房间码 → 存活隧道。保留期内再次进入同一房间直接复用，跳过整条直连链。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JoinerRelay> ReuseCache = new();
 
     /// <summary>SIO_UDP_CONNRESET：Windows 上对端端口未开时 ICMP 不可达会把后续
     /// ReceiveFrom 变成 10054 异常——打洞期间大量发往「猜测端口」，必须关闭。</summary>
@@ -225,6 +291,24 @@ public static class P2pTunnel
         return list;
     }
 
+    /// <summary>A3 缓存重连用：优先把单个 socket 绑回缓存的本地端口（源端口不变 → 对端 NAT 映射
+    /// 与 KCP 传输目标仍指向本机，命中率更高）；端口被占用/权限不足则退回随机端口池。</summary>
+    private static List<Socket> BindOrNewPool(int localPort)
+    {
+        if (localPort <= 0 || localPort > 65535) return CreatePunchPool();
+        try
+        {
+            var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            try { s.IOControl(SioUdpConnReset, new byte[4], null); } catch { /* 非 Windows 忽略 */ }
+            s.Bind(new IPEndPoint(IPAddress.Any, localPort));
+            return new List<Socket> { s };
+        }
+        catch
+        {
+            return CreatePunchPool();   // 端口被占用/权限不足 → 随机端口
+        }
+    }
+
     /// <summary>v49.4 KCP 游戏流量调优：更新间隔 100→20ms（MC 交互延迟），
     /// 快速重传 2（丢包快速恢复，移动网关键），关闭 KCP 拥塞控制（MC 协议自带
     /// TCP 流控，双层 CC 在丢包链路上会叠加降速），窗口 256→512 吸收区块突发。</summary>
@@ -246,42 +330,78 @@ public static class P2pTunnel
     // ---------------------------------------------------------------- 加入端
 
     /// <summary>
-    /// 加入端 P2P 尝试（v50.6.7 relay-first）：中继上游秒级就绪（0 等待进服）→ 后台继续
-    /// 完整打洞流程（候选交换 → IPv6 直连 → UDP 打洞），打通后把上游从中继升级为直连
-    /// （下一次 MC 重连生效，不断当前连接）。relayAddr 为空或中继不可达时退回同步打洞；
-    /// 打洞也失败才返回 null（调用方走 LoopbackForwarder 兜底）。
+    /// 加入端 P2P 尝试（v51 A1 直连优先）：先在 DirectBudgetMs 有界预算内跑完整直连链
+    /// （IPv6 → UPnP 映射 → UDP 打洞），成功即用直连、完全不建中继（frp 使用率为零）；
+    /// 预算内失败才建中继兜底，并后台继续尝试直连（打通后下次 MC 重连切换，中继随即释放）。
+    /// A4：同房间在保留期内再次进入直接复用已建隧道，跳过整条直连链。
+    /// relayAddr 为空（仅直连模式）时不建中继，失败即返回 null（调用方走 LoopbackForwarder 兜底）。
     /// </summary>
     public static async Task<P2pAttempt?> JoinerTryAsync(StudioApiClient api, string token, string code,
         string? relayAddr, IProgress<string>? log, CancellationToken ct)
     {
-        var relay = new JoinerRelay(api, token, code, log);
-        // v50.6.7 relay-first：先建中继上游（秒级）——游戏即刻可玩，打洞不再阻塞进服
-        if (!string.IsNullOrWhiteSpace(relayAddr) && IPEndPoint.TryParse(relayAddr, out var rep))
+        var reuseKey = code.Trim().ToUpperInvariant();
+        // A4：保留期内再次进入同一房间 → 复用已建隧道（一次打洞多次复用，跳过整条直连链）
+        if (ReuseCache.TryGetValue(reuseKey, out var live) && live.TryReuse(out var reuseAddr, out var reuseKind))
         {
+            P2pTrace.Log($"[joiner] 复用房间 {code} 的已建隧道 {reuseAddr}（跳过打洞）");
+            log?.Report("复用已建立的直连隧道（跳过打洞）");
+            return new P2pAttempt(reuseKind, reuseAddr);
+        }
+
+        var relay = new JoinerRelay(api, token, code, log);
+        // A1：直连优先——有界预算内先跑完整直连链，成功即零中转、不建任何中继
+        P2pUpstream? direct = null;
+        using (var directCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            directCts.CancelAfter(DirectBudgetMs);
             try
             {
-                var tcp = new TcpClient();
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(TimeSpan.FromSeconds(6));
-                await tcp.ConnectAsync(rep.Address, rep.Port, cts.Token).ConfigureAwait(false);
-                relay.StartWith(new RelayUpstream(tcp));
-                relay.UpgradeInBackgroundAsync();
-                log?.Report("中继线路已就绪（后台继续尝试直连升级，打通后延迟更低）");
-                return new P2pAttempt(P2pRouteKind.Relay, relay.LocalAddress);
+                direct = await relay.ConnectUpstreamAsync(directCts.Token, "initial").ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException)
             {
-                log?.Report("中继线路不可用（" + ex.Message + "），转入直连尝试…");
+                P2pTrace.Log($"[joiner] 直连链在 {DirectBudgetMs / 1000.0:0.#}s 预算内未打通，转入中继兜底");
+            }
+            catch (Exception ex)
+            {
+                P2pTrace.Log($"[joiner] 直连链异常：{ex.GetType().Name}: {ex.Message}");
             }
         }
-        var first = await relay.ConnectUpstreamAsync(ct).ConfigureAwait(false);
-        if (first is null)
+        if (direct is not null)
+        {
+            relay.StartWith(direct);
+            P2pTrace.Log($"[joiner] 直连已采用（{direct.Kind}），不建立中继（frp 使用率为零）");
+            log?.Report(direct.Kind == P2pRouteKind.V6
+                ? "IPv6 直连已建立（零中转）"
+                : "P2P 打洞成功，走直连（零中转）");
+            return new P2pAttempt(direct.Kind, relay.LocalAddress);
+        }
+
+        // 直连链预算内失败：建中继兜底（relayAddr 为空=仅直连模式，不回退）
+        if (string.IsNullOrWhiteSpace(relayAddr) || !IPEndPoint.TryParse(relayAddr, out var rep))
         {
             relay.Dispose();
             return null;
         }
-        relay.StartWith(first);
-        return new P2pAttempt(first.Kind, relay.LocalAddress);
+        try
+        {
+            var tcp = new TcpClient();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(6));
+            await tcp.ConnectAsync(rep.Address, rep.Port, cts.Token).ConfigureAwait(false);
+            relay.StartWith(new RelayUpstream(tcp));
+            relay.UpgradeInBackgroundAsync();
+            P2pTrace.Log("[joiner] 直连未打通，已用中继兜底（后台继续尝试直连升级）");
+            log?.Report("直连未打通，已用中继兜底（后台继续尝试直连升级）");
+            return new P2pAttempt(P2pRouteKind.Relay, relay.LocalAddress);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log?.Report("中继线路也不可用（" + ex.Message + "），P2P 不可用");
+            relay.Dispose();
+            return null;
+        }
     }
 
     /// <summary>P2P 上游抽象：稳定本地监听背后的实际隧道（v6 TCP 或 KCP）。</summary>
@@ -394,6 +514,9 @@ public static class P2pTunnel
         {
             _life.Cancel();
             try { _transport.Dispose(); } catch { }
+            // v51：隧道改为「单次 MC 会话」语义后拆得更频繁，必须连打洞 socket 一起释放，
+            // 否则每次断开都泄漏一个本地 UDP 端口（KcpSocketTransport 不接管 socket 生命周期）
+            try { _udp.Dispose(); } catch { }
         }
     }
 
@@ -412,6 +535,20 @@ public static class P2pTunnel
         private readonly CancellationTokenSource _cts = new();
         private readonly SemaphoreSlim _reconnectLock = new(1, 1);   // 防止并发重建出多条隧道
         private P2pUpstream? _current;
+        // 承载时长统计（本方案核心验收指标）：直连占比越高 = frp 使用率越低
+        private long _directCarryMs;
+        private long _relayCarryMs;
+        private int _carryReported;
+        // A2/A4：活跃 MC 泵计数（0=空闲）与最近活动时刻——空闲超 IdleRetention 释放隧道
+        private int _activePumps;
+        private long _lastActivityMs = Environment.TickCount64;
+        // A3 直连端点缓存：最近一次成功的直连，重连时先试缓存端点（跳过整轮探测/信令/打洞）
+        private DirectCache? _directCache;
+
+        /// <summary>A3 直连端点缓存：路由类型 + 对端观察地址 + 本端命中端口 + 房间 secret + 记录时刻。</summary>
+        private sealed record DirectCache(P2pRouteKind Kind, IPEndPoint Peer, int LocalPort, string Secret, long AtMs);
+        /// <summary>缓存有效期：会话内 NAT 映射通常仍有效，超过该时长视为过期，回退完整直连链。</summary>
+        private const long DirectCacheTtlMs = 90_000;
 
         public string LocalAddress { get; }
 
@@ -432,10 +569,13 @@ public static class P2pTunnel
             P2pTrace.Log(message);   // v46.2 复盘日志：UI 进度同步落盘
         }
 
-        /// <summary>接入首条上游后启动监听循环与会话总时长控制。</summary>
+        /// <summary>接入首条上游后启动监听循环、会话总时长控制与空闲回收。</summary>
         public void StartWith(P2pUpstream first)
         {
             _current = first;
+            Touch();
+            // A4：注册进程级复用缓存——保留期内再次进入同房间直接复用本隧道
+            ReuseCache[_code.Trim().ToUpperInvariant()] = this;
             _ = Task.Run(() => AcceptLoopAsync(_cts.Token));
             _ = Task.Run(async () =>
             {
@@ -447,6 +587,68 @@ public static class P2pTunnel
                 }
                 catch (OperationCanceledException) { }
             });
+            _ = Task.Run(IdleWatchAsync);
+        }
+
+        /// <summary>刷新最近活动时刻（MC 接入 / 断开 / 复用均调用），重置空闲回收计时。</summary>
+        private void Touch() => Interlocked.Exchange(ref _lastActivityMs, Environment.TickCount64);
+
+        /// <summary>A4 空闲回收：MC 退出后隧道与 NAT 映射保留 IdleRetention（期间 keep-alive 维持映射），
+        /// 保留期内再次接入即续期；超时释放，避免长期空转占用 frp / 端口。</summary>
+        private async Task IdleWatchAsync()
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(30), _cts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+                if (Volatile.Read(ref _activePumps) > 0) { Touch(); continue; }
+                if (Environment.TickCount64 - Interlocked.Read(ref _lastActivityMs)
+                    < (long)IdleRetention.TotalMilliseconds) continue;
+                Log($"隧道空闲超过 {IdleRetention.TotalMinutes:0.#} 分钟，释放隧道与 NAT 映射（下次进入将重新建立）");
+                RaiseSession("P2P 隧道空闲超时自动释放");
+                Dispose();
+                return;
+            }
+        }
+
+        /// <summary>A4：保留期内再次进入同房间时复用本隧道。false=不可复用（已释放 / 上游已死）。</summary>
+        public bool TryReuse(out string localAddress, out P2pRouteKind kind)
+        {
+            localAddress = LocalAddress;
+            kind = P2pRouteKind.Relay;
+            if (_cts.IsCancellationRequested) return false;
+            var up = _current;
+            // v51：隧道已随上次 MC 会话结束而拆除（_current=null）时，仍复用本 relay 的
+            // 稳定本地监听（127.0.0.1 端口不变，MC「重新连接」直接可用）；MC 接入时
+            // ServeMcAsync 会自动重建隧道。仅 relay 本身已释放才不可复用。
+            if (up is not null && up.Alive) kind = up.Kind;
+            Touch();
+            return true;
+        }
+
+        /// <summary>v51：MC 会话结束 → 通知房主端拆除对应直连路。KCP 无 wire 级 FIN，房主端主循环
+        /// 每 1.5s 轮询信令，读到 nat=NatSessionClosed 即取消该路并关闭其 MC 服务器连接。
+        /// 后台尽力而为、失败静默——房主端也会因 MC 服务器自身超时兜底清理。</summary>
+        private void NotifyHostSessionClosed()
+        {
+            var api = _api;
+            var token = _token;
+            var code = _code;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await api.P2pSignalAsync(token, code, "joiner",
+                        new P2pCandidates(Array.Empty<string>(), "", NatSessionClosed, 0), cts.Token)
+                        .ConfigureAwait(false);
+                    P2pTrace.Log($"[joiner] 已通知房主端拆除会话（{code}）");
+                }
+                catch (Exception ex)
+                {
+                    P2pTrace.Log($"[joiner] 通知房主端拆除会话失败（忽略）：{ex.Message}");
+                }
+            }, CancellationToken.None);
         }
 
         private async Task AcceptLoopAsync(CancellationToken ct)
@@ -463,6 +665,9 @@ public static class P2pTunnel
 
         private async Task ServeMcAsync(TcpClient mc, CancellationToken ct)
         {
+            // A2：整个 MC 会话期间计为「活跃」，供后台升级判断中继是否空闲可立即释放
+            Interlocked.Increment(ref _activePumps);
+            Touch();
             try
             {
                 var up = _current;
@@ -484,7 +689,9 @@ public static class P2pTunnel
                     RaiseLauncherLog("P2P 直连隧道已重建");
                 }
                 Log("游戏客户端已接入隧道");
+                var carrySw = Stopwatch.StartNew();
                 var mcClosed = await up.PumpAsync(mc, ct).ConfigureAwait(false);
+                AccumulateCarry(up.Kind, carrySw.ElapsedMilliseconds);
                 // v50.6.7：pump 期间 _current 已被升级/重建为其他上游 → 退役本旧上游即可，
                 // MC 重连将直接接入更优线路（中继→直连升级后，旧中继连接由此回收）
                 if (!ReferenceEquals(_current, up) && _current is { Alive: true })
@@ -495,7 +702,16 @@ public static class P2pTunnel
                 }
                 if (mcClosed)
                 {
-                    Log("游戏客户端断开，隧道保持待命（在 MC 里点「重新连接」即可返回）");
+                    // v51 修复：隧道是「单次 MC 会话」语义——MC 客户端断开即整体拆除。
+                    // 旧行为「保持待命、复用隧道」会把下一次 MC 握手注入上一会话遗留的僵尸后端连接
+                    // （房主端 MC 服务器连接因 KCP 无 FIN 未关闭），客户端 Netty 报
+                    // "Pipeline has no inbound protocol configured" 而连不上服务器。
+                    Log("游戏客户端断开，隧道已释放（再次进入会自动重建）");
+                    RaiseLauncherLog("游戏客户端断开，P2P 隧道已释放（再次进入会自动重建）");
+                    _current = null;
+                    _directCache = null;   // 旧路由 socket 已随该路结束，缓存端点作废，避免重连白等 2s
+                    try { up.Dispose(); } catch { }
+                    NotifyHostSessionClosed();   // 让房主端同步拆除其 KCP 会话与 MC 服务器连接
                 }
                 else
                 {
@@ -528,6 +744,8 @@ public static class P2pTunnel
             }
             finally
             {
+                Interlocked.Decrement(ref _activePumps);
+                Touch();
                 try { mc.Dispose(); } catch { }
             }
         }
@@ -564,7 +782,7 @@ public static class P2pTunnel
             {
                 try
                 {
-                    var up = await ConnectUpstreamAsync(_cts.Token).ConfigureAwait(false);
+                    var up = await ConnectUpstreamAsync(_cts.Token, "upgrade").ConfigureAwait(false);
                     if (up is null)
                     {
                         Log("后台直连尝试未成功（保持中继线路，延迟较高）");
@@ -578,7 +796,15 @@ public static class P2pTunnel
                             up.Dispose();   // 竞速胜出的已是直连（断线重建等），丢弃本次结果
                             return;
                         }
+                        var prev = _current;
                         _current = up;
+                        // A2：中继被直连取代 → 若当前无 MC 在泵（空闲中继），立即释放 frp 连接，
+                        //     不再等下一次 MC 泵结束才回收；有 MC 在用时由 ServeMcAsync 收尾释放。
+                        if (prev is RelayUpstream && Volatile.Read(ref _activePumps) == 0)
+                        {
+                            try { prev.Dispose(); } catch { }
+                            Log("中继线路已释放（直连已就绪，frp 连接已关闭）");
+                        }
                         Log("直连已打通（延迟更低）——在 MC 里断开重连一次即可切换直连线路");
                         RaiseLauncherLog("P2P 直连已打通，MC 里重新连接即可切换直连线路");
                     }
@@ -598,6 +824,13 @@ public static class P2pTunnel
             {
                 // 等锁期间别人已重建成功 → 直接复用
                 if (_current is { Alive: true }) return _current;
+                // A3：先试缓存直连端点——会话内 NAT 映射通常仍有效，命中即跳过整轮探测/信令/打洞
+                var cached = await TryCachedDirectAsync(ct).ConfigureAwait(false);
+                if (cached is not null)
+                {
+                    _current = cached;
+                    return cached;
+                }
                 for (var i = 0; i < 3 && !ct.IsCancellationRequested; i++)
                 {
                     if (i > 0)
@@ -607,7 +840,7 @@ public static class P2pTunnel
                     }
                     try
                     {
-                        var up = await ConnectUpstreamAsync(ct).ConfigureAwait(false);
+                        var up = await ConnectUpstreamAsync(ct, "reconnect").ConfigureAwait(false);
                         if (up is not null)
                         {
                             _current = up;
@@ -628,8 +861,88 @@ public static class P2pTunnel
             }
         }
 
-        /// <summary>建立一条到房主的新上游（原 JoinerTryAsync 主体）。</summary>
-        public async Task<P2pUpstream?> ConnectUpstreamAsync(CancellationToken ct)
+        /// <summary>A3：把成功的直连端点记入缓存（供后续重连跳过整条直连链）。</summary>
+        private void CacheDirect(P2pRouteKind kind, IPEndPoint? peer, int localPort, string secret)
+        {
+            if (peer is null) return;
+            _directCache = new DirectCache(kind, peer, localPort, secret, Environment.TickCount64);
+        }
+
+        /// <summary>A3 快速重连：向缓存的对端端点重发 magic（≤2s），命中即重建 KCP 隧道，
+        /// 跳过 NAT 探测 / 信令交换 / 完整打洞。缓存过期、未命中或异常一律返回 null（回退完整直连链），
+        /// 因此本路径只可能省时、不会导致连接失败。对端路由端口变化时缓存自然失效。</summary>
+        private async Task<P2pUpstream?> TryCachedDirectAsync(CancellationToken ct)
+        {
+            var c = _directCache;
+            if (c is null) return null;
+            if (Environment.TickCount64 - c.AtMs > DirectCacheTtlMs) { _directCache = null; return null; }
+            try
+            {
+                if (c.Kind == P2pRouteKind.V6)
+                {
+                    var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+                    var ok = false;
+                    try
+                    {
+                        using var v6cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        v6cts.CancelAfter(2500);
+                        await tcp.ConnectAsync(c.Peer, v6cts.Token).ConfigureAwait(false);
+                        ok = true;
+                    }
+                    finally
+                    {
+                        if (!ok) { try { tcp.Dispose(); } catch { } }   // 连接失败即释放，异常交由外层 catch 作废缓存
+                    }
+                    Log($"缓存直连命中（IPv6 {c.Peer}），跳过完整直连链");
+                    return new V6Upstream(tcp);
+                }
+                var pool = BindOrNewPool(c.LocalPort);
+                try
+                {
+                    var magic = RoomMagic(_code, c.Secret);
+                    var win = await PunchPoolAsync(pool, new[] { c.Peer }, magic + "|J|", magic + "|", 2000, ct)
+                        .ConfigureAwait(false);
+                    if (win is null)
+                    {
+                        Log("缓存直连未命中（对端映射可能已失效），回退完整直连链");
+                        _directCache = null;
+                        return null;
+                    }
+                    pool.Remove(win.Socket);
+                    Log($"缓存直连命中（UDP {win.Observed}），跳过完整直连链");
+                    return new KcpUpstream(win.Socket, win.Observed);
+                }
+                finally { DisposeExcept(pool, null); }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _directCache = null;   // 缓存端点异常（IPv6 连接失败等）→ 作废，下次走完整直连链，避免反复白等
+                Log("缓存直连尝试异常：" + ex.Message + "，回退完整直连链");
+                return null;
+            }
+        }
+
+        /// <summary>建立一条到房主的新上游。socket 池在本层创建并兜底释放：
+        /// 核心方法成功时会把胜出 socket 从池中移除（所有权移交上游），其余一律在此释放，
+        /// 覆盖取消（直连优先的预算到期）与异常路径，杜绝 socket 泄漏。</summary>
+        public async Task<P2pUpstream?> ConnectUpstreamAsync(CancellationToken ct, string trigger = "initial")
+        {
+            var pool = CreatePunchPool();
+            try
+            {
+                return await ConnectUpstreamCoreAsync(pool, ct, trigger).ConfigureAwait(false);
+            }
+            finally
+            {
+                DisposeExcept(pool, null);
+            }
+        }
+
+        /// <summary>直连链主体：NAT 探测 → 信令交换 → LAN → IPv6 → UDP 打洞。
+        /// trigger 标注触发来源（initial=首次连接 / reconnect=断线重建 / upgrade=后台直连升级），
+        /// 供埋点归因——重连与后台升级的命中率远低于首次连接，混算会掩盖真实瓶颈。</summary>
+        private async Task<P2pUpstream?> ConnectUpstreamCoreAsync(List<Socket> pool, CancellationToken ct, string trigger)
         {
             var api = _api;
             var token = _token;
@@ -642,8 +955,8 @@ public static class P2pTunnel
 
             var sw = Stopwatch.StartNew();      // 全程计时（埋点用）
             var punchSw = new Stopwatch();      // 打洞阶段计时
-            // 1) v49.4 打洞 socket 池：每 socket 独立映射，先并发探测 NAT（含每 socket 映射 + 步长）
-            var pool = CreatePunchPool();
+            // 1) v49.4 打洞 socket 池：由 ConnectUpstreamAsync 创建并兜底释放（此处仅使用，勿再新建），
+            //    每 socket 独立映射，先并发探测 NAT（含每 socket 映射 + 步长）
             var udp = pool[0];
             var punchPort = ((IPEndPoint)udp.LocalEndPoint!).Port;
             P2pTrace.Log($"打洞 socket 池 ×{pool.Count}（首口 {punchPort}），开始 NAT 探测…");
@@ -661,8 +974,9 @@ public static class P2pTunnel
             if (probe.Maps.Count > 0)
                 P2pTrace.Log($"每 socket 映射：[{string.Join(" | ", probe.Maps)}]");
             // v50.6.6：映射保活——探测到开窗全程无流量，CGN UDP 超时 15–30s 会先杀映射
+            // B1：分档保活（cone 全池续命 / 对称仅 socket0 + 单目标），避免推进其余 socket 的分配序列
             using var kaCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var natKeepalive = Task.Run(() => KeepNatMappingsAsync(pool, apiHost, kaCts.Token), CancellationToken.None);
+            var natKeepalive = Task.Run(() => KeepNatMappingsAsync(pool, apiHost, preserving, kaCts.Token), CancellationToken.None);
             var mapTask = NatPortMapper.MapAsync(udp, ct);   // P1-D：UPnP/PMP/PCP 主动映射（并行，不阻塞信令）
             var upnpPort = 0;
             var upnpLogged = false;
@@ -670,14 +984,18 @@ public static class P2pTunnel
             var v6Tried = false;   // v50.6.5：声明提前供 Report 闭包读取（归因 v6 路径）
 
             // 埋点：连接终点上报一次（后台尽力，失败静默）
+            // phase=inner：本条只描述「直连尝试」的结果，与会话层的 outer 终局分开统计
             void Report(string result)
             {
                 kaCts.Cancel();   // v50.6.6：所有终点（含异常后 Report）统一停保活
                 P2pTrace.End("joiner", result,
-                    $"总耗时 {sw.ElapsedMilliseconds}ms natSelf={natSelf} natPeer={host?.Nat ?? "unknown"}");
+                    $"总耗时 {sw.ElapsedMilliseconds}ms natSelf={natSelf} natPeer={host?.Nat ?? "unknown"} trigger={trigger}",
+                    phase: "inner");
                 var payload = new
                 {
                     role = "joiner",
+                    phase = "inner",
+                    trigger,
                     nat_self = natSelf,
                     nat_peer = host?.Nat ?? "unknown",
                     result,
@@ -700,13 +1018,17 @@ public static class P2pTunnel
 
             // 2) 轮询：上报候选并拉取房主候选（通用候选先试 v6；定向候选到位才打洞）
             var lastSrvNow = 0.0;
+            var lastRttMs = 0.0;   // B7：最近一次信令往返 RTT（用于 punch_at 的半 RTT 补偿）
             var secret = "";   // v50 M6：双方 ≥50 时云端下发，HMAC 化握手 magic
             for (var attempt = 0; attempt < 12 && !ct.IsCancellationRequested; attempt++)
             {
+                var sigSw = Stopwatch.StartNew();
                 var signal = await api.P2pSignalAsync(token, code, "joiner",
                     new P2pCandidates(v6, mapped, natSelf, 0, lan, punchPort, predPorts, upnpPort,
                         pool.Select(s => ((IPEndPoint)s.LocalEndPoint!).Port).ToList(), probe.MapsStrings, probe.Delta),
                     ct).ConfigureAwait(false);
+                sigSw.Stop();
+                lastRttMs = sigSw.ElapsedMilliseconds;
                 if (signal.Secret.Length > 0) secret = signal.Secret;
                 upnpPort = mapTask.IsCompleted ? mapTask.Result : 0;
                 if (upnpPort > 0 && !upnpLogged)
@@ -731,7 +1053,7 @@ public static class P2pTunnel
                             try { await api.P2pSignalAsync(token, code, "joiner",
                                 new P2pCandidates(v6, "", "direct-v6", 0), ct).ConfigureAwait(false); } catch { /* 尽力通知 */ }
                             Report("v6");
-                            DisposeExcept(pool, null);
+                            CacheDirect(P2pRouteKind.V6, v6Attempt.Client.RemoteEndPoint as IPEndPoint, 0, secret);
                             return new V6Upstream(v6Attempt);
                         }
                         Log("IPv6 直连未成功，继续 P2P 打洞");
@@ -745,7 +1067,6 @@ public static class P2pTunnel
             {
                 Log("房主候选不可用（12 次轮询未拿到房主信令，房主可能未开房主服务或信令异常）");
                 Report("no_peer");
-                DisposeExcept(pool, null);
                 return null;
             }
 
@@ -765,60 +1086,120 @@ public static class P2pTunnel
                     {
                         Log($"同网段直连成功（对端 {lanObserved}），建立 KCP 隧道…");
                         Report("lan");
-                        DisposeExcept(pool, udp);
+                        CacheDirect(P2pRouteKind.UdpHole, lanObserved,
+                            ((IPEndPoint)udp.LocalEndPoint!).Port, secret);
+                        pool.Remove(udp);
                         return new KcpUpstream(udp, lanObserved);
                     }
                 }
                 if ((host.V4Lan?.Count ?? 0) > 0) Log("同网段直连未成功，继续公网打洞");
             }
 
-            // 4) IPv4 UDP 打洞（v49.4 池化引擎）：组合矩阵同 v49（仅双侧对称且完全不可预测才放弃），
-            //    但「可预测」的判据扩展为：任一侧有预测窗口 / 每 socket 映射 / 步长 / UPnP 双侧映射——
-            //    池化打洞下对端每 socket 端口已直接可达（cone）或落在扩展扫描窗内（对称）。
+            // 4) IPv4 UDP 打洞（v49.4 池化引擎）
+            //    B4/B5：不再以「双侧对称且不可预测」提前放弃——样本不足或判据不可信时按 cone 处理并照常打洞，
+            //    对称组合改用最大喷洒强度打满窗口，仍失败才落 frp。
             var peerSymmetric = string.Equals(host.Nat, "symmetric", StringComparison.OrdinalIgnoreCase);
             var dualSymmetric = !preserving && peerSymmetric;
-            var anyPrediction = (host.PredPorts?.Count ?? 0) > 0 || (host.Maps?.Count ?? 0) > 0
-                || host.Delta > 0 || predPorts.Count > 0 || probe.Maps.Count > 0
-                || (host.UpnpPort > 0 && upnpPort > 0);   // 双方都有外部映射 = 双向可入站
-            if (!host.Targeted || string.IsNullOrEmpty(host.V4) || !IPEndPoint.TryParse(host.V4, out var hostEp)
-                || (dualSymmetric && !anyPrediction))
+            var anySym = !preserving || peerSymmetric;
+            if (!host.Targeted || string.IsNullOrEmpty(host.V4) || !IPEndPoint.TryParse(host.V4, out var hostEp))
             {
-                Log(dualSymmetric && !anyPrediction
-                    ? $"双侧均为对称 NAT 且端口步长完全不可预测，跳过打洞（本端 {natSelf} / 对端 {host.Nat}）"
-                    : $"打洞条件不满足（Targeted={host.Targeted}，房主 V4='{host.V4}'，房主未就绪打洞路）");
+                Log($"打洞条件不满足（Targeted={host.Targeted}，房主 V4='{host.V4}'，房主未就绪打洞路）");
                 Report("skipped");
-                DisposeExcept(pool, null);
                 return null;
             }
             // P1-F 同步起打：双方以服务器锚定的同一绝对时刻开始发 magic（首包命中率↑、窗口全重叠）
-            if (await WaitForRendezvousAsync(lastSrvNow, host.PunchAt, ct).ConfigureAwait(false))
+            // B7：按最近一次信令 RTT 补偿半程——srv_now 是 RTT/2 之前采样的，不减会让首包整体晚到 RTT/2
+            if (await WaitForRendezvousAsync(lastSrvNow, host.PunchAt, lastRttMs, ct).ConfigureAwait(false))
                 Log("已与房主同步起打");
-            // v49.4 窗口：cone-cone 12s（引擎通常 <2s 命中，留余量）；涉对称 10s；
-            // 双侧对称且无步长（彩票局）7s 尽快回落中转
-            var punchTimeout = dualSymmetric && !anyPrediction ? 7000
-                : !preserving || peerSymmetric ? 10000 : 12000;
-            var targets = BuildPunchTargets(host, hostEp, peerSymmetric || !preserving ? 12 : 8);
-            Log($"UDP 打洞中（{pool.Count} 路并发 × 目标 {targets.Count}（含 {hostEp}"
-                + (host.UpnpPort > 0 ? "+外部映射" : "") + $"），{punchTimeout / 1000}s 窗口）…");
+            // B5 窗口按 NAT 组合分档：cone×cone 12s；含对称 10s；双对称给足 10s 强喷洒
+            var punchTimeout = anySym ? 10000 : 12000;
+            // B2 喷洒预算：cone×cone 不喷洒（0）；涉对称 256；双对称 512
+            var targetBudget = dualSymmetric ? SprayTargetsDualSym : anySym ? SprayTargetsSym : 0;
+            var targets = BuildPunchTargets(host, hostEp, anySym ? 12 : 8,
+                targetBudget > 0 ? targetBudget : 72);
+            Log($"UDP 打洞中（{pool.Count} 路并发 × 目标 {targets.Count}"
+                + (targetBudget > 0 ? $"（喷洒预算 {targetBudget}）" : "")
+                + $"（含 {hostEp}" + (host.UpnpPort > 0 ? "+外部映射" : "") + $"，{punchTimeout / 1000}s 窗口）…");
+            // B3：任一侧有 UPnP/PCP 外部映射即可作为「对端可直达」的首选直连目标（已进目标组第一层）
+            if (host.UpnpPort > 0 || upnpPort > 0)
+                Log($"UPnP 直连通道：对端映射 {(host.UpnpPort > 0 ? host.UpnpPort.ToString() : "无")}"
+                    + $"，本端映射 {(upnpPort > 0 ? upnpPort.ToString() : "无")}（单侧即可直达）");
             P2pTrace.Log($"打洞目标组（{targets.Count}）：[{string.Join(" | ", targets)}]");
             punchSw.Start();
+            // v51 观测回灌（两阶段）：涉对称组合先跑一个短观测窗（confirmOnly 只观测不提交），
+            // 收集对端真实端点并回灌信令，再做「观测端点置顶」的定向补打——把端口猜测变成学习，
+            // 半对称场景命中后补打几乎立即成功；cone×cone 保持单阶段快路径不变。
+            var observed = new List<IPEndPoint>();
+            if (anySym)
+            {
+                await PunchPoolAsync(pool, targets, magic + "|J|", magic + "|", ObserveWindowMs, ct,
+                    0, LotterySpan, observed, confirmOnly: true).ConfigureAwait(false);
+                if (observed.Count > 0)
+                {
+                    Log($"打洞观测：收到房主 magic 来自 {observed[0]}（回灌信令）…");
+                    try
+                    {
+                        var sig = await api.P2pSignalAsync(token, code, "joiner",
+                            new P2pCandidates(v6, mapped, natSelf, 0, lan, punchPort, predPorts, upnpPort,
+                                pool.Select(s => ((IPEndPoint)s.LocalEndPoint!).Port).ToList(), probe.MapsStrings,
+                                probe.Delta, Observed: observed[0].ToString()),
+                            ct).ConfigureAwait(false);
+                        if (sig.Peer is not null) host = sig.Peer;   // 刷新房主候选（含其回灌后的映射）
+                        if (sig.Peer is { Observed.Length: > 0 })
+                            Log($"房主回灌观测：本端该方向真实映射为 {sig.Peer.Observed}");
+                    }
+                    catch { /* 回灌失败不致命，按原目标继续补打 */ }
+                    if (IPEndPoint.TryParse(host.V4, out var hostEp2)) hostEp = hostEp2;
+                    targets = BuildPunchTargets(host, hostEp, anySym ? 12 : 8,
+                        targetBudget > 0 ? targetBudget : 72, observed);
+                    P2pTrace.Log($"定向补打目标组（{targets.Count}）：[{string.Join(" | ", targets)}]");
+                }
+            }
             var win = await PunchPoolAsync(pool, targets, magic + "|J|",
-                magic + "|", punchTimeout, ct).ConfigureAwait(false);
+                magic + "|", punchTimeout, ct, targetBudget, LotterySpan).ConfigureAwait(false);
             if (win is null)
             {
                 Log("UDP 打洞未成功（窗口内未收到房主任何 magic 应答）");
                 Report("timeout");
-                DisposeExcept(pool, null);
                 return null;
             }
             Log($"UDP 打洞成功（对端 {win.Observed}），建立 KCP 隧道…");
             Report("udp");
-            DisposeExcept(pool, win.Socket);
+            CacheDirect(P2pRouteKind.UdpHole, win.Observed,
+                ((IPEndPoint)win.Socket.LocalEndPoint!).Port, secret);
+            pool.Remove(win.Socket);
             return new KcpUpstream(win.Socket, win.Observed);
+        }
+
+        /// <summary>累计各线路承载时长：直连（IPv6 / UDP 打洞）与中继（frp）分开记。
+        /// 会话结束输出「直连占比」——判断 frp 使用率是否真的下降，靠的就是这个硬指标。</summary>
+        private void AccumulateCarry(P2pRouteKind kind, long ms)
+        {
+            if (ms <= 0) return;
+            if (kind == P2pRouteKind.Relay) Interlocked.Add(ref _relayCarryMs, ms);
+            else Interlocked.Add(ref _directCarryMs, ms);
+        }
+
+        /// <summary>输出承载时长统计（幂等，只报一次）。</summary>
+        private void ReportCarry()
+        {
+            if (Interlocked.Exchange(ref _carryReported, 1) != 0) return;
+            var direct = Interlocked.Read(ref _directCarryMs);
+            var relay = Interlocked.Read(ref _relayCarryMs);
+            var total = direct + relay;
+            if (total <= 0) return;
+            var line = $"承载时长统计：直连 {direct / 1000.0:0.#}s / 中继 {relay / 1000.0:0.#}s（直连占比 {direct * 100.0 / total:0.#}%）";
+            P2pTrace.Log(line);
+            RaiseLauncherLog(line);
         }
 
         public void Dispose()
         {
+            ReportCarry();
+            // A4：从复用缓存注销（仅当缓存仍指向本实例，避免误删新建的隧道）
+            var key = _code.Trim().ToUpperInvariant();
+            if (ReuseCache.TryGetValue(key, out var self) && ReferenceEquals(self, this))
+                ReuseCache.TryRemove(key, out _);
             try { _listener.Stop(); } catch { }
             _cts.Cancel();
             try { _current?.Dispose(); } catch { }
@@ -847,11 +1228,12 @@ public static class P2pTunnel
         private int ResolvePort() => _portProvider?.Invoke() ?? _mcPort;
         private readonly CancellationTokenSource _cts = new();
         private Socket? _udp;
-        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active =
-            new(StringComparer.OrdinalIgnoreCase);   // 打洞中的路（主循环与路线任务并发访问）
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource> _active =
+            new(StringComparer.OrdinalIgnoreCase);   // 打洞中的路（主循环与路线任务并发访问）；值为该路 CTS，供「会话结束」标记取消
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _failed =
             new(StringComparer.OrdinalIgnoreCase);   // 失败记录（3 分钟内不重试）
         private Task? _loop;
+        private V6Forwarder? _v6Fwd;   // C-a：进程内 IPv6 转发器（不动 MC 绑定，见 V6Forwarder）
 
         /// <summary>房主端 P2P 活动日志（线程池线程触发，订阅方自行调度）。</summary>
         public event Action<string>? Log;
@@ -879,6 +1261,24 @@ public static class P2pTunnel
             {
                 var v6 = CollectV6();
                 var lan = CollectV4Lan();
+                // C-a（安全备选方案）：MC 默认只绑 IPv4（server-ip 为空 → 0.0.0.0），对端无法 v6 直连。
+                // 不动 MC 绑定（避免 IPV6_V6ONLY 把 127.0.0.1 / 局域网一起打断），改为进程内 [::] 转发器。
+                // 仅服务端模式（_portProvider 为空=端口固定）且端口已知时才建：转发器必须与 MC 同端口，
+                // 否则对端按 host.Port 连接会落空；端口为 0（MC 未就绪）时跳过，绝不绑随机端口空转。
+                var fwdPort = ResolvePort();
+                if (v6.Count > 0 && _portProvider is null && fwdPort > 0)
+                {
+                    try
+                    {
+                        _v6Fwd = new V6Forwarder(fwdPort, fwdPort);
+                        LogLine($"[P2P] IPv6 直连转发器就绪：[::]:{_v6Fwd.Port} → 127.0.0.1:{fwdPort}"
+                            + "（MC 绑定不动，IPv4 路径不受影响）");
+                    }
+                    catch (Exception ex)
+                    {
+                        LogLine("[P2P] IPv6 转发器启动失败（MC 可能已绑 v6 或端口占用），v6 直连不可用：" + ex.Message);
+                    }
+                }
                 var udp = NewUdpSocket();
                 _udp = udp;
                 var probe = await Task.Run(() => ProbeNatPool(new[] { udp }, _api.ApiHost, ct), ct).ConfigureAwait(false);
@@ -899,7 +1299,21 @@ public static class P2pTunnel
                             new P2pCandidates(v6, probe.Mapped, nat, ResolvePort(), lan), ct).ConfigureAwait(false);
                         foreach (var peer in signal.Peers ?? Array.Empty<P2pPeer>())
                         {
-                            if (peer.Email.Length == 0 || _active.ContainsKey(peer.Email)) continue;
+                            if (peer.Email.Length == 0) continue;
+                            // v51：加入端 MC 会话结束标记 → 拆除该路（KCP 无 wire 级 FIN，靠此及时
+                            // 关闭房主端 KCP 会话与其 MC 服务器连接，避免僵尸连接导致对方重连串线）。
+                            // 同时清掉失败冷却，保证对方立刻重连时能重新开路。
+                            if (string.Equals(peer.Nat, NatSessionClosed, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _failed.TryRemove(peer.Email, out _);
+                                if (_active.TryGetValue(peer.Email, out var dead))
+                                {
+                                    try { dead.Cancel(); } catch { }
+                                    LogLine($"[P2P] {peer.Email} 游戏会话结束，已拆除其直连路（可再次进入）");
+                                }
+                                continue;
+                            }
+                            if (_active.ContainsKey(peer.Email)) continue;
                             if (_failed.TryGetValue(peer.Email, out var t))
                             {
                                 if ((DateTime.UtcNow - t).TotalMinutes < 3) continue;
@@ -910,8 +1324,9 @@ public static class P2pTunnel
                                 LogLine($"[P2P] 直连路已达上限 {MaxRoutes}，{peer.Email} 自动走中转");
                                 continue;
                             }
-                            _active.TryAdd(peer.Email, 1);
-                            _ = Task.Run(() => ServeRouteAsync(peer, v6, lan, ct), ct);
+                            var routeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                            _active[peer.Email] = routeCts;
+                            _ = Task.Run(() => ServeRouteAsync(peer, v6, lan, routeCts.Token), CancellationToken.None);
                         }
                     }
                     catch (OperationCanceledException) { throw; }
@@ -941,19 +1356,22 @@ public static class P2pTunnel
             var pool = CreatePunchPool();
             var udp = pool[0];
             // v50.6.6：映射保活——路线从建立到开窗可达数十秒，CGN UDP 超时 15–30s 会先杀映射
+            // B1：保活需按本端 NAT 分档，故推迟到探测出 preserving 之后再启动（见下）
             using var kaCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var natKeepalive = Task.Run(() => KeepNatMappingsAsync(pool, _api.ApiHost, kaCts.Token), CancellationToken.None);
             NatProbe? probe = null;   // 提前声明供 Report 闭包读取（探测早退时为 null）
 
             // 埋点：路线终点上报（后台尽力，失败静默）
+            // phase=inner：房主侧按「加入者路线」上报，属直连尝试结果，与会话层终局分开统计
             void Report(string result)
             {
                 kaCts.Cancel();   // v50.6.6：所有终点统一停保活
                 P2pTrace.End("host", result,
-                    $"{email} 打洞耗时 {punchSw.ElapsedMilliseconds}ms natSelf={natSelf} natPeer={joiner.Nat}");
+                    $"{email} 打洞耗时 {punchSw.ElapsedMilliseconds}ms natSelf={natSelf} natPeer={joiner.Nat}",
+                    phase: "inner");
                 var payload = new
                 {
                     role = "host",
+                    phase = "inner",
                     nat_self = natSelf,
                     nat_peer = joiner.Nat,
                     result,
@@ -981,24 +1399,15 @@ public static class P2pTunnel
                 var preserving = probe.Preserving;
                 natSelf = preserving ? "cone" : "symmetric";
                 var predPorts = probe.PredPorts;   // P1-C：本端下一次映射的端口预测（cone 为空）
+                // B1：探测出 preserving 后再启动分档保活（cone 全池 / 对称 socket0 单目标）
+                var natKeepalive = Task.Run(() => KeepNatMappingsAsync(pool, _api.ApiHost, preserving, kaCts.Token), CancellationToken.None);
                 // 等映射结果（≤5s， discovery 4s 自限；未完成按 0 上报，不拖信令）
                 await Task.WhenAny(mapTask, Task.Delay(5000, CancellationToken.None)).ConfigureAwait(false);
                 upnpPort = mapTask.IsCompleted ? mapTask.Result : 0;
                 var peerSymmetric = string.Equals(joiner.Nat, "symmetric", StringComparison.OrdinalIgnoreCase);
 
 
-                // v49.4 组合矩阵：仅"双侧对称且完全不可预测"放弃；可预测判据扩展为
-                // 任一侧有预测窗口 / 每 socket 映射 / 步长 / 双侧外部映射
-                var anyPrediction = (joiner.PredPorts?.Count ?? 0) > 0 || (joiner.Maps?.Count ?? 0) > 0
-                    || joiner.Delta > 0 || predPorts.Count > 0 || probe.Maps.Count > 0
-                    || (joiner.UpnpPort > 0 && upnpPort > 0);
-                if (!preserving && peerSymmetric && !anyPrediction)
-                {
-                    LogLine($"[P2P] {email}：双侧均为对称 NAT 且步长不可预测，放弃打洞（走中转）");
-                    _failed[email] = DateTime.UtcNow;
-                    Report("skipped");
-                    return;
-                }
+                // B4/B5：不再「双侧对称且不可预测就放弃」——按 cone 处理并照常打洞，对称组合改用最大喷洒打满窗口
                 LogLine($"[P2P] 为 {email} 开直连路（映射 {mapped}，本端 {natSelf}，socket ×{pool.Count}"
                     + (predPorts.Count > 0 ? $"，预测窗口 ×{predPorts.Count}" : "")
                     + (upnpPort > 0 ? $"，外部映射 {upnpPort}" : "") + $"），定向上报…");
@@ -1006,13 +1415,17 @@ public static class P2pTunnel
                 IPEndPoint? joinerEp = null;
                 var peerPunchAt = 0.0;
                 var lastSrvNow = 0.0;
+                var lastRttMs = 0.0;   // B7：最近一次信令往返 RTT（punch_at 半程补偿）
                 var secret = "";   // v50 M6：双方 ≥50 时云端下发，HMAC 化握手 magic
                 for (var i = 0; i < 6 && !ct.IsCancellationRequested; i++)
                 {
+                    var sigSw = Stopwatch.StartNew();
                     var signal = await _api.P2pSignalAsync(_token, _code, "host",
-                        new P2pCandidates(v6, mapped, natSelf, 0, lan, punchPort, predPorts, upnpPort,
+                        new P2pCandidates(v6, mapped, natSelf, ResolvePort(), lan, punchPort, predPorts, upnpPort,
                             pool.Select(s => ((IPEndPoint)s.LocalEndPoint!).Port).ToList(), probe.MapsStrings, probe.Delta),
                         ct, forPeer: email).ConfigureAwait(false);
+                    sigSw.Stop();
+                    lastRttMs = sigSw.ElapsedMilliseconds;
                     if (signal.Secret.Length > 0) secret = signal.Secret;
                     lastSrvNow = signal.SrvNow;
                     var p = signal.Peer;
@@ -1063,15 +1476,58 @@ public static class P2pTunnel
                 }
 
                 // 公网打洞（v49.4 池化引擎）：P1-F 同步起打 + 每 socket 映射/预测窗口/邻域批量齐发
-                if (await WaitForRendezvousAsync(lastSrvNow, peerPunchAt, ct).ConfigureAwait(false))
+                // B7：punch_at 半 RTT 补偿（srv_now 采样点早于收到响应 RTT/2）
+                if (await WaitForRendezvousAsync(lastSrvNow, peerPunchAt, lastRttMs, ct).ConfigureAwait(false))
                     LogLine($"[P2P] {email} 已同步起打");
-                var punchTimeout = !preserving && peerSymmetric && !anyPrediction ? 7000
-                    : !preserving || peerSymmetric ? 10000 : 15000;
-                var targets = BuildPunchTargets(joiner, joinerEp, peerSymmetric || !preserving ? 12 : 8);
-                LogLine($"[P2P] {email} 开始打洞（{pool.Count} 路并发 × 目标 {targets.Count}（含 {joinerEp}），{punchTimeout / 1000}s 窗口）…");
+                // B5 窗口按组合分档 / B2 喷洒预算：cone×cone 12s 不喷洒；含对称 10s×256；双对称 10s×512
+                var dualSymmetric = !preserving && peerSymmetric;
+                var anySym = !preserving || peerSymmetric;
+                var punchTimeout = anySym ? 10000 : 12000;
+                var targetBudget = dualSymmetric ? SprayTargetsDualSym : anySym ? SprayTargetsSym : 0;
+                var targets = BuildPunchTargets(joiner, joinerEp, anySym ? 12 : 8,
+                    targetBudget > 0 ? targetBudget : 72);
+                LogLine($"[P2P] {email} 开始打洞（{pool.Count} 路并发 × 目标 {targets.Count}"
+                    + (targetBudget > 0 ? $"（喷洒预算 {targetBudget}）" : "")
+                    + $"（含 {joinerEp}），{punchTimeout / 1000}s 窗口）…");
+                // B3：任一侧有 UPnP/PCP 外部映射即可作「对端可直达」的首选直连目标（已进目标组第一层）
+                if (joiner.UpnpPort > 0 || upnpPort > 0)
+                    LogLine($"[P2P] {email} UPnP 直连通道：对端映射 {(joiner.UpnpPort > 0 ? joiner.UpnpPort.ToString() : "无")}"
+                        + $"，本端映射 {(upnpPort > 0 ? upnpPort.ToString() : "无")}（单侧即可直达）");
                 punchSw.Start();
+                // v51 观测回灌（两阶段）：同加入端——涉对称组合先跑短观测窗（confirmOnly 只观测不提交），
+                // 回灌对端真实端点后再做「观测端点置顶」的定向补打；cone×cone 保持单阶段快路径。
+                var observed = new List<IPEndPoint>();
+                if (anySym)
+                {
+                    await PunchPoolAsync(pool, targets, magic + "|H|", magic + "|", ObserveWindowMs, ct,
+                        0, LotterySpan, observed, confirmOnly: true).ConfigureAwait(false);
+                    if (observed.Count > 0)
+                    {
+                        LogLine($"[P2P] {email} 打洞观测：收到加入端 magic 来自 {observed[0]}（回灌信令）…");
+                        try
+                        {
+                            var sig = await _api.P2pSignalAsync(_token, _code, "host",
+                                new P2pCandidates(v6, mapped, natSelf, ResolvePort(), lan, punchPort, predPorts,
+                                    upnpPort, pool.Select(s => ((IPEndPoint)s.LocalEndPoint!).Port).ToList(),
+                                    probe?.MapsStrings, probe?.Delta ?? 0, Observed: observed[0].ToString()),
+                                ct, forPeer: email).ConfigureAwait(false);
+                            var p2 = sig.Peer;
+                            if (p2 is not null && IPEndPoint.TryParse(p2.V4, out var ep2))
+                            {
+                                joiner = p2;      // 刷新加入端候选（含其回灌后的映射）
+                                joinerEp = ep2;
+                            }
+                            if (p2 is { Observed.Length: > 0 })
+                                LogLine($"[P2P] {email} 加入端回灌观测：本端该方向真实映射为 {p2.Observed}");
+                        }
+                        catch { /* 回灌失败不致命，按原目标继续补打 */ }
+                        targets = BuildPunchTargets(joiner, joinerEp, anySym ? 12 : 8,
+                            targetBudget > 0 ? targetBudget : 72, observed);
+                        P2pTrace.Log($"[P2P] {email} 定向补打目标组（{targets.Count}）：[{string.Join(" | ", targets)}]");
+                    }
+                }
                 var win = await PunchPoolAsync(pool, targets, magic + "|H|",
-                    magic + "|", punchTimeout, ct).ConfigureAwait(false);
+                    magic + "|", punchTimeout, ct, targetBudget, LotterySpan).ConfigureAwait(false);
                 if (win is null)
                 {
                     LogLine($"[P2P] {email} 打洞未成功（走中转）");
@@ -1096,7 +1552,11 @@ public static class P2pTunnel
                 {
                     try { s.Dispose(); } catch { }
                 }
-                _active.TryRemove(email, out _);
+                // v51：路结束即释放该路 CTS（「会话结束」标记只 Cancel 不 Dispose，统一在此收口）
+                if (_active.TryRemove(email, out var rc))
+                {
+                    try { rc.Dispose(); } catch { }
+                }
             }
         }
 
@@ -1159,7 +1619,71 @@ public static class P2pTunnel
         public void Dispose()
         {
             _cts.Cancel();
+            try { _v6Fwd?.Dispose(); } catch { }
             try { _udp?.Dispose(); } catch { }
+            _cts.Dispose();
+        }
+    }
+
+    /// <summary>C-a（安全备选方案）进程内 IPv6 转发器：MC 默认只绑 IPv4（server-ip 为空 → 0.0.0.0），
+    /// 对端无法用 v6 直连。此处不动 MC 的绑定（避免 IPV6_V6ONLY 把 127.0.0.1 / 局域网桥接一起打断），
+    /// 由启动器在 [::]:port 起一个 v6-only 监听（DualMode=false，与 0.0.0.0 不冲突），
+    /// 把 v6 入站流量转发到 127.0.0.1:port。这样 v6 直连可用，IPv4 路径完全不受影响。</summary>
+    private sealed class V6Forwarder : IDisposable
+    {
+        private readonly TcpListener _listener;
+        private readonly int _targetPort;
+        private readonly CancellationTokenSource _cts = new();
+
+        public int Port { get; }
+
+        public V6Forwarder(int port, int targetPort)
+        {
+            _targetPort = targetPort;
+            _listener = new TcpListener(IPAddress.IPv6Any, port);
+            _listener.Server.DualMode = false;   // v6-only：与 MC 的 IPv4 绑定共存，不抢 127.0.0.1
+            _listener.Start();
+            Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+            _ = Task.Run(AcceptLoopAsync);
+        }
+
+        private async Task AcceptLoopAsync()
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                TcpClient inbound;
+                try { inbound = await _listener.AcceptTcpClientAsync(_cts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                catch { break; }
+                _ = Task.Run(() => PumpAsync(inbound));
+            }
+        }
+
+        private async Task PumpAsync(TcpClient inbound)
+        {
+            TcpClient? local = null;
+            try
+            {
+                local = new TcpClient();
+                await local.ConnectAsync(IPAddress.Loopback, _targetPort, _cts.Token).ConfigureAwait(false);
+                var a = inbound.GetStream();
+                var b = local.GetStream();
+                var up = a.CopyToAsync(b, _cts.Token);
+                var down = b.CopyToAsync(a, _cts.Token);
+                await Task.WhenAny(up, down).ConfigureAwait(false);
+            }
+            catch { /* 单连接失败不影响转发器 */ }
+            finally
+            {
+                try { inbound.Dispose(); } catch { }
+                try { local?.Dispose(); } catch { }
+            }
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            try { _listener.Stop(); } catch { }
             _cts.Dispose();
         }
     }
@@ -1317,23 +1841,29 @@ public static class P2pTunnel
             }
         }
 
-        // 步长学习（P1-C 增强）：顺序样本端口序列的正增量众数（≤32）
-        var orderedPorts = samples.Select(PortOf).Select(s => int.TryParse(s, out var p) ? p : 0)
-            .Where(p => p > 0).ToList();
+        // 步长学习（P1-C 增强）+ B1.3 预测原点：改为只用「socket0 的样本序列」——
+        // 保活只续 socket0 的映射、不推进其余 socket 的分配计数器，故 socket0 的最近样本才与开窗时刻对齐
+        // （原实现取全体样本末位，混入了其他 socket 的端口，预测原点偏移）
+        var sock0Ports = new List<int>();
+        foreach (var p in pubs)
+            if (p is not null && int.TryParse(PortOf(p), out var pp0)) sock0Ports.Add(pp0);
+        foreach (var c in cloud[0])
+            if (c is not null && int.TryParse(PortOf(c), out var pc)) sock0Ports.Add(pc);
+
         var delta = 0;
         var deltas = new List<int>();
-        for (var i = 1; i < orderedPorts.Count; i++)
+        for (var i = 1; i < sock0Ports.Count; i++)
         {
-            var d = orderedPorts[i] - orderedPorts[i - 1];
+            var d = sock0Ports[i] - sock0Ports[i - 1];
             if (d > 0 && d <= 32) deltas.Add(d);
         }
         if (deltas.Count > 0) delta = deltas.GroupBy(d => d).OrderByDescending(g => g.Count()).First().Key;
 
-        // 预测窗口（兼容字段，仅对称 NAT）：末样本 + delta·k ±1（k=1..8，≤16 个）
+        // 预测窗口（兼容字段，仅对称 NAT）：socket0 末样本 + delta·k ±1（k=1..8，最多 24 个；服务端 D1 已放宽至保留 24）
         var predPorts = new List<int>();
-        if (!preserving && delta > 0 && orderedPorts.Count > 0)
+        if (!preserving && delta > 0 && sock0Ports.Count > 0)
         {
-            var last = orderedPorts[^1];
+            var last = sock0Ports[^1];
             for (var k = 1; k <= 8; k++)
             {
                 for (var w = -1; w <= 1; w++)
@@ -1344,6 +1874,15 @@ public static class P2pTunnel
             }
         }
 
+        // B4 样本门槛：样本 < 4 不足以判定「对称」（丢包会把 cone 误判成对称，掐死本可打通的对），
+        // 按 cone 处理并清空步长/预测，让打洞照常进行
+        if (samples.Count < 4)
+        {
+            preserving = true;
+            delta = 0;
+            predPorts.Clear();
+        }
+
         var mapped = cloud[0].FirstOrDefault(p => p is not null) ?? pubs.FirstOrDefault(p => p is not null) ?? $"{apiHost}:0";
         P2pTrace.Log($"NAT 探测完成：样本×{samples.Count}/期望×{expected}（socket×{nSockets}，公共 STUN×{stunTargets.Count}）"
             + $"→ {(preserving ? "cone" : "symmetric")}，delta {delta}"
@@ -1351,30 +1890,36 @@ public static class P2pTunnel
         return new NatProbe(mapped!, preserving, samples, maps, mapsStr, delta, predPorts);
     }
 
-    /// <summary>v50.6.6：NAT 映射保活。国内 CGN 的 UDP 映射超时实测 15–30s（移动宽带/蜂窝普遍
-    /// 30s，多层 NAT 取最短层，20260926 调研），而「探测→候选交换→rendezvous→开窗」全程
-    /// 可达 15–25s——不加保活时窗口开打时映射已过期重建（端口变化），双方朝死端口互打，
-    /// 是 cone×cone 成功率仅 14.8% 的最可信解释。每 2.5s 由全部池 socket 对云机 STUN 端口
-    /// 重发一轮自探包（RFC 4787 REQ-6：出向包刷新映射计时），候选在窗口内保持有效。
-    /// ct 取消 / 75s 兜底 / socket 释放（SendTo 异常）均自然退出，不影响打洞主流程。</summary>
+    /// <summary>B1 NAT 映射保活（与端口预测解耦）：间隔默认 15s（原 2.5s 比 RFC 4787 要求激进约 50 倍，
+    /// 且持续推进 NAT 分配计数器、与端口预测互相打架），打洞窗口开启前由调用方取消
+    /// （窗口内本就在主动发包，无需保活，且要让预测样本不被中途推进）。
+    /// 分档：cone 全池续命（每路稳定映射都要保）；对称仅 socket0 + 单一目标——复用同一映射，
+    /// 不推进其余 socket 的分配序列，避免污染端口预测。
+    /// 国内 CGN 的 UDP 映射超时实测 15–30s（多层 NAT 取最短层），不加保活时窗口开打时映射已过期重建，
+    /// 双方朝死端口互打，是 cone×cone 成功率仅 14.8% 的最可信解释。RFC 4787 REQ-6：出向包刷新映射计时。
+    /// ct 取消 / 90s 兜底 / socket 释放（SendTo 异常）均自然退出，不影响打洞主流程。</summary>
     private static async Task KeepNatMappingsAsync(IReadOnlyList<Socket> sockets, string apiHost,
-        CancellationToken ct)
+        bool preserving, CancellationToken ct)
     {
         var req = Encoding.ASCII.GetBytes("MCSTUN1");
         var targets = new List<IPEndPoint>();
         try
         {
-            foreach (var port in StunPorts)
-                targets.Add(new IPEndPoint(IPAddress.Parse(apiHost), port));
+            if (preserving)
+                foreach (var port in StunPorts)
+                    targets.Add(new IPEndPoint(IPAddress.Parse(apiHost), port));
+            else if (StunPorts.Length > 0)
+                targets.Add(new IPEndPoint(IPAddress.Parse(apiHost), StunPorts[0]));
         }
         catch { return; }
-        var deadline = Environment.TickCount64 + 75_000;
+        if (targets.Count == 0 || sockets.Count == 0) return;
+        IReadOnlyList<Socket> keep = preserving || sockets.Count <= 1 ? sockets : new[] { sockets[0] };
+        var deadline = Environment.TickCount64 + 90_000;
         try
         {
             while (!ct.IsCancellationRequested && Environment.TickCount64 < deadline)
             {
-                await Task.Delay(2500, ct).ConfigureAwait(false);
-                foreach (var s in sockets)
+                foreach (var s in keep)
                 {
                     if (s is null) continue;
                     foreach (var t in targets)
@@ -1384,6 +1929,7 @@ public static class P2pTunnel
                         catch (SocketException) { }
                     }
                 }
+                await Task.Delay(NatKeepAliveMs, ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { }
@@ -1420,15 +1966,19 @@ public static class P2pTunnel
     /// <summary>
     /// P1-F 同步起打：按服务器锚定的 punch_at（服务器时钟）等待到同一绝对时刻。
     /// 时钟校准：offset = 本机时钟 − 服务器时钟（取自同一响应的 srv_now，精度 ±RTT/2 足够）。
+    /// B7：srv_now 是服务器在「收到请求后、发出响应前」采样的，客户端收到时已过 RTT/2，
+    /// 因此等待量再减 rttMs/2，把双方首包到达对端 NAT 的时刻对齐到同一窗口（DCUtR 的关键手段）。
     /// 等待上限 5s：偏差过大或锚点已过期时放弃同步，退化为原来的自然重叠（双方长窗口兜底）。
     /// 返回是否执行了同步等待。
     /// </summary>
-    private static async Task<bool> WaitForRendezvousAsync(double srvNow, double punchAt, CancellationToken ct)
+    private static async Task<bool> WaitForRendezvousAsync(double srvNow, double punchAt, double rttMs,
+        CancellationToken ct)
     {
         if (srvNow <= 0 || punchAt <= 0) return false;
         var nowLocal = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
         var offset = nowLocal - srvNow;
-        var waitMs = (int)((punchAt + offset - nowLocal) * 1000);
+        var rttHalf = rttMs > 0 && rttMs < 4000 ? rttMs / 2000.0 : 0;   // 半 RTT（秒）；异常值不补偿
+        var waitMs = (int)((punchAt + offset - nowLocal - rttHalf) * 1000);
         if (waitMs <= 0 || waitMs > 5000) return false;
         await Task.Delay(waitMs, ct).ConfigureAwait(false);
         return true;
@@ -1474,20 +2024,32 @@ public static class P2pTunnel
         return null;
     }
 
-    /// <summary>v49.4 打洞目标组：对端每 socket 映射（cone=稳定直达，最优先）→ 外部映射（UPnP/PMP/PCP）
-    /// → 主映射 → 对端自报预测窗 → 由对端 delta 推导的扩展窗（k=1..20 ±2，覆盖对端起打后的
-    /// 新分配；打洞首轮回发包即按此序列分配）→ 主映射邻域 ±spread（CGNAT 半对称主因）。
-    /// 全部限定对端公网 IP，按端口去重，封顶 72 个。</summary>
-    private static List<IPEndPoint> BuildPunchTargets(P2pPeer peer, IPEndPoint primary, int spread)
+    /// <summary>v49.4 打洞目标组（B2 分级预算）：对端每 socket 映射（cone=稳定直达，最优先）→ 外部映射
+    /// （UPnP/PMP/PCP）→ 主映射 → 对端自报预测窗（以上为「必进」高可信层）→ 主映射邻域 ±spread
+    /// （CGNAT 半对称主因，第二优先、保证不被 delta 窗挤掉）→ 由对端 delta 推导的扩展窗
+    /// （k=1..20 ±2，用剩余预算填充）。全部限定对端公网 IP，按端口去重，封顶 budget 个；
+    /// 超出部分留给 PunchPool 的持续彩票口按窗口预算补充。
+    /// v51 观测回灌：observed（本端打洞中直接观测到的对端真实端点）作为最高优先目标层——
+    /// 观测端点是对端在本方向的真实映射，命中即直连，优先于一切猜测（maps/预测/邻域）。</summary>
+    private static List<IPEndPoint> BuildPunchTargets(P2pPeer peer, IPEndPoint primary, int spread, int budget,
+        IReadOnlyList<IPEndPoint>? observed = null)
     {
+        if (budget < 8) budget = 8;
         var list = new List<IPEndPoint>();
         var seen = new HashSet<int>();
         void Add(IPEndPoint ep)
         {
-            if (list.Count >= 72) return;
+            if (list.Count >= budget) return;
             if (ep.Port is > 0 and < 65536 && seen.Add(ep.Port)) list.Add(ep);
         }
 
+        // 第零层（最高优先，v51 观测回灌）：本端直接观测到的对端真实端点——对端在本方向的
+        // 实际映射，是「学习」而非「猜测」，命中即直连。限定同公网 IP（观测端点必来自对端）。
+        foreach (var o in observed ?? (IReadOnlyList<IPEndPoint>)Array.Empty<IPEndPoint>())
+        {
+            if (o.Address.Equals(primary.Address)) Add(o);
+        }
+        // 第一层（必进）：对端稳定/已知映射——命中即直连，不受预算裁剪
         foreach (var m in peer.Maps ?? (IReadOnlyList<string>)Array.Empty<string>())
         {
             if (IPEndPoint.TryParse(m, out var ep) && ep.Address.Equals(primary.Address))
@@ -1497,7 +2059,17 @@ public static class P2pTunnel
         Add(primary);
         foreach (var p in peer.PredPorts ?? (IReadOnlyList<int>)Array.Empty<int>())
             Add(new IPEndPoint(primary.Address, p));
-        // 扩展窗：对端最新映射 + delta·k（k=1..20）±2——对端打洞首轮回的每个新目标端口
+        // 第二层（保证）：邻域扫描——主映射 ±spread。实测 CGNAT「半对称」：对多数目标复用映射端口，
+        // 对新目标（对端）分配邻近端口；两侧均判 cone 却打洞超时的主因，必须优先于 delta 窗保留
+        if (spread > 0)
+        {
+            for (var d = 1; d <= spread; d++)
+            {
+                Add(new IPEndPoint(primary.Address, primary.Port - d));
+                Add(new IPEndPoint(primary.Address, primary.Port + d));
+            }
+        }
+        // 第三层（填充）：对端最新映射 + delta·k（k=1..20）±2——对端打洞首轮回的每个新目标端口
         // 都会按分配序列落在此区间内，扫描即可命中其任意 socket 的早期映射
         if (peer.Delta > 0 && (peer.Maps?.Count ?? 0) > 0
             && IPEndPoint.TryParse(peer.Maps![^1], out var lastMap))
@@ -1509,16 +2081,6 @@ public static class P2pTunnel
                     var p = lastMap.Port + peer.Delta * k + w;
                     if (p > 0 && p < 65536) Add(new IPEndPoint(primary.Address, p));
                 }
-            }
-        }
-        // 邻域扫描：主映射 ±spread——实测 CGNAT「半对称」：对多数目标复用映射端口，
-        // 对新目标（对端）分配邻近端口；两侧均判 cone 却打洞超时的主因
-        if (spread > 0)
-        {
-            for (var d = 1; d <= spread; d++)
-            {
-                Add(new IPEndPoint(primary.Address, primary.Port - d));
-                Add(new IPEndPoint(primary.Address, primary.Port + d));
             }
         }
         return list;
@@ -1545,61 +2107,89 @@ public static class P2pTunnel
     private sealed record PunchWin(Socket Socket, IPEndPoint Observed);
 
     /// <summary>
-    /// v49.4 池化打洞引擎：socket 池全部并发向目标组发 magic 并监听，任一 socket 先收到
+    /// v49.4 池化打洞引擎（B2 增强）：socket 池全部并发向目标组发 magic 并监听，任一 socket 先收到
     /// 对端包即胜（立即返回，不再像 v49 双 socket 那样等两路全部跑完）。
-    /// 发包节奏：前 3 轮每 70ms 全量突发（起打对齐窗口内的首包命中率），其后每 180ms
-    /// 每 socket 轮转 16 目标子集（限制稳态 pps，防 CGNAT 泛洪检测）；55% 窗口后加入
-    /// ±160 随机彩票口（随机型对称 NAT 的 birthday 补救）。收到合法 magic 即回 echo
-    /// （对端同刻确认），返回胜者。旧版 HolePunch 保留给 LAN 直连用。
+    /// 发包节奏：前 3 轮每 70ms 对「高可信结构化目标」全量突发（起打对齐窗口内的首包命中率），
+    /// 其后每 180ms 每 socket 轮转 16 目标子集（限制稳态 pps，防 CGNAT 泛洪检测）。
+    /// B2：budget&gt;targets.Count 时启用「持续彩票口」——每约 1.5s 重抽一批随机端口（不与既有重复），
+    /// 累计覆盖端口数随窗口增长直至 budget（对称 NAT 的生日悖论补救）；span 为随机半径，不足 budget
+    /// 时自动放宽以保证预算放得下。彩票口始终按分片轮转，不参与首轮全量突发，避免瞬时泛洪。
+    /// 收到合法 magic 即回 echo（对端同刻确认），返回胜者。旧版 HolePunch 保留给 LAN 直连用。
+    /// v51 观测回灌：observedSink 非空时把每次收到的对端真实源端点记入（去重）；confirmOnly=true 时
+    /// 只观测不提交（记录 + 回 echo 后继续喷洒），供调用方完成回灌信令后再定向补打。
     /// </summary>
     private static async Task<PunchWin?> PunchPoolAsync(
         IReadOnlyList<Socket> sockets, IReadOnlyList<IPEndPoint> targets, string magic,
-        string validPrefix, int timeoutMs, CancellationToken ct)
+        string validPrefix, int timeoutMs, CancellationToken ct, int budget = 0, int span = 160,
+        IList<IPEndPoint>? observedSink = null, bool confirmOnly = false)
     {
-        return await Task.Run(() => PunchPoolCore(sockets, targets, magic, validPrefix, timeoutMs, ct), ct)
-            .ConfigureAwait(false);
+        return await Task.Run(() => PunchPoolCore(sockets, targets, magic, validPrefix, timeoutMs, ct, budget, span,
+            observedSink, confirmOnly), ct).ConfigureAwait(false);
     }
 
     private static PunchWin? PunchPoolCore(
         IReadOnlyList<Socket> sockets, IReadOnlyList<IPEndPoint> targets, string magic,
-        string validPrefix, int timeoutMs, CancellationToken ct)
+        string validPrefix, int timeoutMs, CancellationToken ct, int budget, int span,
+        IList<IPEndPoint>? observedSink = null, bool confirmOnly = false)
     {
         if (targets.Count == 0) return null;
         var payloadRaw = Encoding.ASCII.GetBytes(magic + Guid.NewGuid().ToString("N")[..8]);
-        // v49：补齐到 64B——部分 CGNAT/防火墙对超小 UDP 包做 QoS 丢弃
+        // v49：补齐到 64B——部分 CGNAT/防火墙对超小 UDP 包做 QoS 丢弃（B8）
         var payload = payloadRaw.Length >= 64 ? payloadRaw : PadTo(payloadRaw, 64);
         var echo = Encoding.ASCII.GetBytes(magic.Replace("|J|", "|E|").Replace("|H|", "|E|"));
         var buf = new byte[160];
         var address = targets[0].Address;
         var basePort = targets[0].Port;
         var rnd = new Random();
+        // B2 持续彩票口：累计覆盖到 budget（budget<=targets.Count 时不喷洒，如 cone×cone）
         var lottery = new List<IPEndPoint>();
-        var lotteryAt = (long)(timeoutMs * 0.55);
-        var chunks = Math.Max(1, (targets.Count + 15) / 16);
+        var seen = new HashSet<int>(targets.Select(t => t.Port));
+        var sprayEnabled = budget > targets.Count;
+        var effSpan = sprayEnabled ? Math.Max(span, budget) : span;   // 半径不足则放宽，保证预算放得下
+        const int refreshMs = 1500;
+        var nextRefreshAt = 0L;
         var sw = Stopwatch.StartNew();
         var round = 0;
         while (sw.ElapsedMilliseconds < timeoutMs && !ct.IsCancellationRequested)
         {
-            // 迟段随机扩窗：对端若为随机分配型对称 NAT，唯一机会是撞端口
-            if (lottery.Count == 0 && sw.ElapsedMilliseconds >= lotteryAt)
+            // 持续重抽：按「窗口内均匀铺满预算」定批量，并受 PunchPps 限速（防泛洪检测）
+            if (sprayEnabled && sw.ElapsedMilliseconds >= nextRefreshAt)
             {
-                for (var i = 0; i < 10; i++)
+                var remaining = budget - targets.Count - lottery.Count;
+                var perWindow = (int)Math.Ceiling(remaining * (double)refreshMs / Math.Max(1, timeoutMs));
+                var cap = Math.Max(1, PunchPps * refreshMs / 1000);
+                var add = Math.Min(Math.Max(perWindow, 1), cap);
+                var added = 0;
+                for (var tries = 0; added < add && tries < add * 30; tries++)
                 {
-                    var p = basePort + rnd.Next(-160, 161);
-                    if (p is > 1024 and < 65535 && targets.All(t => t.Port != p))
+                    var p = basePort + rnd.Next(-effSpan, effSpan + 1);
+                    if (p is > 1024 and < 65535 && seen.Add(p))
+                    {
                         lottery.Add(new IPEndPoint(address, p));
+                        added++;
+                    }
                 }
-                if (lottery.Count > 0)
-                    P2pTrace.Log($"打洞加入随机扩窗 ×{lottery.Count}（±160 彩票口，第 {round} 轮起）");
+                if (added > 0)
+                    P2pTrace.Log($"彩票口扩窗 +{added} → 累计 {targets.Count + lottery.Count}/{budget}（±{effSpan}，第 {round} 轮）");
+                nextRefreshAt = sw.ElapsedMilliseconds + refreshMs;
             }
             var count = targets.Count + lottery.Count;
+            var chunks = Math.Max(1, (count + 15) / 16);
             for (var si = 0; si < sockets.Count; si++)
             {
                 var s = sockets[si];
                 if (round < 3)
                 {
+                    // 首 3 轮：结构化目标全量突发（首包命中率）
                     foreach (var t in targets) SendTo(s, payload, t);
-                    foreach (var t in lottery) SendTo(s, payload, t);
+                    // 彩票口按分片轮转铺开（不参与全量突发，避免瞬时泛洪）
+                    if (lottery.Count > 0)
+                    {
+                        var lchunks = Math.Max(1, (lottery.Count + 15) / 16);
+                        var lfrom = ((round + si) % lchunks) * 16;
+                        var lto = Math.Min(lottery.Count, lfrom + 16);
+                        for (var j = lfrom; j < lto; j++) SendTo(s, payload, lottery[j]);
+                    }
                 }
                 else
                 {
@@ -1628,11 +2218,17 @@ public static class P2pTunnel
                         catch (SocketException) { break; }
                         var text = Encoding.ASCII.GetString(buf, 0, n);
                         if (!text.StartsWith(validPrefix, StringComparison.Ordinal)) continue;
+                        var src = (IPEndPoint)from;
+                        // v51 观测回灌：记录对端真实源端点（去重），供回灌信令与定向补打使用
+                        if (observedSink is not null && !observedSink.Any(o => o.Port == src.Port))
+                            observedSink.Add(src);
                         if (!text.Contains("|E|", StringComparison.Ordinal))
                         {
-                            try { s.SendTo(echo, from); } catch { /* 回声失败不致命 */ }
+                            try { s.SendTo(echo, src); } catch { /* 回声失败不致命 */ }
                         }
-                        return new PunchWin(s, (IPEndPoint)from);
+                        // confirmOnly：仅观测不提交（继续喷洒以收集更多端点），由调用方回灌后再补打
+                        if (confirmOnly) continue;
+                        return new PunchWin(s, src);
                     }
                 }
                 if (sw.ElapsedMilliseconds < phaseEnd - 8) Thread.Sleep(8);
@@ -1642,38 +2238,60 @@ public static class P2pTunnel
 
         static void SendTo(Socket s, byte[] payload, IPEndPoint t)
         {
-            try { s.SendTo(payload, t); } catch (SocketException) { /* 单目标失败不致命 */ }
+            // 单目标失败不致命；socket 已被外部释放（ObjectDisposedException）时同样静默，
+            // 避免打洞循环被异常中断（取消路径上池 socket 可能先于本循环释放）
+            try { s.SendTo(payload, t); }
+            catch (SocketException) { }
+            catch (ObjectDisposedException) { }
         }
     }
 
-    /// <summary>IPv6 直连测试：逐个候选 TCP 连接（5s 超时），成功返回已连接的 TcpClient。
+    /// <summary>IPv6 直连测试：逐个候选 TCP 连接（C 收敛为单候选 2s、整体 ≤6s），成功返回已连接的 TcpClient。
     /// v46.2：超时/失败只记日志并试下一候选——原实现超时的 OperationCanceledException 会
     /// 外溢中断整个加入流程（连中转回退都到不了），顺手修复。</summary>
     private static async Task<TcpClient?> TryV6DirectAsync(IReadOnlyList<string> v6List, int port, CancellationToken ct)
     {
+        // C 超时收敛：原每候选硬超时 5s，3 个候选白烧 15s；改为单候选 2s、整体不超过 6s
+        const int PerCandidateMs = 2000;
+        const int TotalBudgetMs = 6000;
+        var sw = Stopwatch.StartNew();
         foreach (var v6 in v6List)
         {
+            if (sw.ElapsedMilliseconds >= TotalBudgetMs) break;
             if (!IPAddress.TryParse(v6, out var ip))
             {
                 P2pTrace.Log($"v6 候选无效已跳过：{v6}");
                 continue;
             }
+            if (IPAddress.IsLoopback(ip))   // C-b 兜底：回环候选（::1）绝不可用
+            {
+                P2pTrace.Log($"v6 候选为回环地址已跳过：[{v6}]");
+                continue;
+            }
+            TcpClient? client = null;
+            var ok = false;
             try
             {
-                var client = new TcpClient(AddressFamily.InterNetworkV6);
+                client = new TcpClient(AddressFamily.InterNetworkV6);
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(5000);
+                timeout.CancelAfter(PerCandidateMs);
                 await client.ConnectAsync(ip, port, timeout.Token).ConfigureAwait(false);
                 P2pTrace.Log($"v6 候选连接成功：[{v6}]:{port}");
+                ok = true;
                 return client;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                P2pTrace.Log($"v6 候选超时（5s 无响应，可能被防火墙拦截或非全球地址）：[{v6}]:{port}");
+                P2pTrace.Log($"v6 候选超时（{PerCandidateMs / 1000}s 无响应，可能被防火墙拦截或非全球地址）：[{v6}]:{port}");
             }
             catch (Exception e)
             {
                 P2pTrace.Log($"v6 候选连接失败：[{v6}]:{port} · {e.GetType().Name}: {e.Message}");
+            }
+            finally
+            {
+                // 失败/超时的候选：显式释放，避免逐个候选累积未关闭的 socket（成功时已随返回值移交调用方）
+                if (!ok) { try { client?.Dispose(); } catch { } }
             }
         }
         return null;
@@ -1751,7 +2369,7 @@ public static class P2pTunnel
         return list.Distinct().Take(4).ToList();
     }
 
-    /// <summary>收集本机全局 IPv6 地址（排除链路本地/站点本地/ULA/多播），最多 4 个。</summary>
+    /// <summary>收集本机全局 IPv6 地址（排除回环/链路本地/站点本地/ULA/多播），最多 4 个。</summary>
     private static List<string> CollectV6()
     {
         var list = new List<string>();
@@ -1764,6 +2382,9 @@ public static class P2pTunnel
                 {
                     var ip = a.Address;
                     if (ip.AddressFamily != AddressFamily.InterNetworkV6) continue;
+                    // C-b：必须显式排除回环 ::1——其首字节 0x00 不匹配任何前缀，IsIPv6LinkLocal 对它也为 false，
+                    // 原过滤会把 ::1 混进候选池，对端连接必然被拒（日志 5 处 [::1] 实证）
+                    if (IPAddress.IsLoopback(ip)) continue;
                     if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6Teredo || ip.IsIPv6UniqueLocal) continue;
                     var bytes = ip.GetAddressBytes();
                     if (bytes.Length != 16 || bytes[0] == 0xfc || bytes[0] == 0xfd || bytes[0] == 0xff) continue;

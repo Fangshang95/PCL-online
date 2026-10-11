@@ -24,7 +24,7 @@
         <Platforms>AnyCPU;x64;ARM64</Platforms>
         <ImplicitUsings>enable</ImplicitUsings>
         <ApplicationManifest>app.manifest</ApplicationManifest>
-        <ApplicationIcon>Images\icon.ico</ApplicationIcon>
+        <ApplicationIcon>Images\icon-online.ico</ApplicationIcon>
         <AssemblyTitle>PClonline</AssemblyTitle>
         <Description>Minecraft 启动器 (原作者: 龙腾猫跃; 基于 PCL2 开源社区版二次修改的 PClonline 定制版)</Description>
         <Product>PClonline</Product>

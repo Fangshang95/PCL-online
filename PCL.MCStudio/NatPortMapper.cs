@@ -16,8 +16,17 @@ namespace PCL.MCStudio;
 public static class NatPortMapper
 {
     private static NatDevice? _device;
-    private static bool _probed;                       // 失败也标记，避免每次连接重复 4s 发现
+    private static long _nextProbeAt;                  // B3：失败后的重试冷却（TickCount64）；成功则长期复用
+    private const long RetryCooldownMs = 60_000;
     private static readonly SemaphoreSlim _lock = new(1, 1);
+
+    /// <summary>B3：手动重置设备发现缓存，供「重试端口映射」入口调用（下次 MapAsync 重新发现）。
+    /// 原实现失败后 _probed 也置位，导致整进程不再重试；现改为冷却期内不重复、冷却后自动重试。</summary>
+    public static void ResetDiscovery()
+    {
+        _device = null;
+        _nextProbeAt = 0;
+    }
 
     /// <summary>
     /// 为本地 UDP socket 创建外部端口映射，成功返回外部端口（0=不可用）。
@@ -52,14 +61,17 @@ public static class NatPortMapper
         }
     }
 
-    /// <summary>设备发现（一次）：先试 UPnP(SSDP)，未中再试 NAT-PMP，任一命中即缓存。</summary>
+    /// <summary>设备发现（B3 可重试）：已发现则长期复用；失败进入 60s 冷却后自动重试（不再整进程只试一次）。
+    /// 先试 UPnP(SSDP)，未中再试 NAT-PMP，任一命中即缓存。</summary>
     private static async Task<NatDevice?> GetDeviceAsync(CancellationToken ct)
     {
-        if (_probed) return _device;
+        if (_device is not null) return _device;                       // 已发现：长期复用
+        if (Environment.TickCount64 < _nextProbeAt) return null;       // 失败冷却期内不重复 4s 发现
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_probed) return _device;
+            if (_device is not null) return _device;
+            if (Environment.TickCount64 < _nextProbeAt) return null;
             var discoverer = new NatDiscoverer();
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(4000);
@@ -69,20 +81,25 @@ public static class NatPortMapper
             }
             catch
             {
-                using var cts2 = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts2.CancelAfter(4000);
-                _device = await discoverer.DiscoverDeviceAsync(PortMapper.Pmp, cts2).ConfigureAwait(false);
+                try
+                {
+                    using var cts2 = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    cts2.CancelAfter(4000);
+                    _device = await discoverer.DiscoverDeviceAsync(PortMapper.Pmp, cts2).ConfigureAwait(false);
+                }
+                catch { _device = null; }
             }
+            if (_device is null) _nextProbeAt = Environment.TickCount64 + RetryCooldownMs;   // B3：失败可重试
             return _device;
         }
         catch
         {
             _device = null;
-            return _device;
+            _nextProbeAt = Environment.TickCount64 + RetryCooldownMs;
+            return null;
         }
         finally
         {
-            _probed = true;
             _lock.Release();
         }
     }

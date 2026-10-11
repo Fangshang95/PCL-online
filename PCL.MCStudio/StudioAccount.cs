@@ -14,9 +14,6 @@ public sealed record FriendEntry(string Email, string Nickname, long FriendsSinc
 public sealed record RoomBrief(string Code, string Room, string Mc, string Loader, string Address, int ExpiresIn,
     bool HasClientPack = true);
 
-/// <summary>发送验证码的结果。服务端为 dev 模式时会直接回传验证码，便于本地联调。</summary>
-public sealed record SendCodeResult(bool Dev, string? Code, int ExpireMinutes);
-
 /// <summary>服务端返回非 2xx 时抛出，携带 HTTP 状态码与服务端错误信息。</summary>
 public class StudioApiException : Exception
 {
