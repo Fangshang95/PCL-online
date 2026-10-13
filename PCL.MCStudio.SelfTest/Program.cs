@@ -1,4 +1,6 @@
+using System.Net.Http;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using PCL.MCStudio;
 
@@ -9,6 +11,8 @@ Console.OutputEncoding = Encoding.UTF8;
 //       dotnet run --project PCL.MCStudio.SelfTest -- --auth <tunnel-api 地址>（仅测账号/好友链路）
 //       dotnet run --project PCL.MCStudio.SelfTest -- --e2e <api.json路径>（一键开房 + 加入装配全链路）
 //       dotnet run --project PCL.MCStudio.SelfTest -- --vanilla <minecraft目录>（仅测 vanilla 房间装配）
+//       dotnet run --project PCL.MCStudio.SelfTest -- --tls <https地址> <根证书PEM路径>
+//         （只测证书判定：拿指定的根去验那台服务器，供 _test_tls_server.py 驱动各场景）
 var e2eIdx = Array.IndexOf(args, "--e2e");
 if (e2eIdx >= 0 && e2eIdx + 1 < args.Length)
 {
@@ -25,6 +29,12 @@ var authIdx = Array.IndexOf(args, "--auth");
 if (authIdx >= 0 && authIdx + 1 < args.Length)
 {
     await RunAuthSelfTest(args[authIdx + 1]);
+    return;
+}
+var tlsIdx = Array.IndexOf(args, "--tls");
+if (tlsIdx >= 0 && tlsIdx + 2 < args.Length)
+{
+    Environment.ExitCode = await RunTlsCheck(args[tlsIdx + 1], args[tlsIdx + 2]);
     return;
 }
 
@@ -225,29 +235,23 @@ async Task RunAuthSelfTest(string baseUrl)
     if (string.IsNullOrWhiteSpace(password))
         password = "St-" + Guid.NewGuid().ToString("N").Substring(0, 12) + "!aZ";
 
-    // 1) 发送验证码（dev 模式直接回传）
-    var sent = await api.SendCodeAsync(emailA);
-    if (!sent.Dev || string.IsNullOrEmpty(sent.Code))
-        throw new Exception("[x] 期望 dev 模式回传验证码");
-    Console.WriteLine($"[1] sendcode   : dev={sent.Dev} code={sent.Code} 有效期={sent.ExpireMinutes}分钟");
+    // 1) 注册（v50.11.17 起没有邮箱验证码：建号只要邮箱 + 口令）
+    var userA = await api.RegisterAsync(emailA, password, "自测A");
+    if (userA.Nickname != "自测A") throw new Exception($"[x] 昵称未保存: {userA.Nickname}");
+    Console.WriteLine($"[1] register   : {userA.Email} / {userA.Nickname}");
 
-    // 2) 错误验证码应被拒
+    // 2) 同一邮箱重复注册应被拒（对照：如果这条也成功，说明邮箱唯一性没在服务端判）
     try
     {
-        await api.RegisterAsync(emailA, "000000", password, "错误码");
-        throw new Exception("[x] 错误验证码竟然注册成功");
+        await api.RegisterAsync(emailA, password, "重复号");
+        throw new Exception("[x] 重复邮箱竟然注册成功");
     }
-    catch (StudioApiException ex) when (ex.StatusCode == 400)
+    catch (StudioApiException ex) when (ex.StatusCode == 409)
     {
-        Console.WriteLine($"[2] 错误验证码 : 已拒绝（{ex.Message}）✔");
+        Console.WriteLine($"[2] 重复邮箱   : 已拒绝（{ex.Message}）✔");
     }
 
-    // 3) 注册
-    var userA = await api.RegisterAsync(emailA, sent.Code!, password, "自测A");
-    if (userA.Nickname != "自测A") throw new Exception($"[x] 昵称未保存: {userA.Nickname}");
-    Console.WriteLine($"[3] register   : {userA.Email} / {userA.Nickname}");
-
-    // 4) 登录（错误密码应 401）
+    // 3) 登录（错误密码应 401）
     try
     {
         await api.LoginAsync(emailA, "WrongPassword1");
@@ -255,30 +259,29 @@ async Task RunAuthSelfTest(string baseUrl)
     }
     catch (StudioApiException ex) when (ex.StatusCode == 401)
     {
-        Console.WriteLine($"[4] 错误密码   : 已拒绝 ✔");
+        Console.WriteLine($"[3] 错误密码   : 已拒绝 ✔");
     }
 
-    // 5) 正常登录（同时验证注册时的密码哈希与盐一致）
+    // 4) 正常登录（同时验证注册时的密码哈希与盐一致）
     var loginA = await api.LoginAsync(emailA, password);
     if (loginA.Nickname != "自测A") throw new Exception("[x] 登录后昵称不一致");
-    Console.WriteLine($"[5] login      : token={loginA.Token[..12]}…");
+    Console.WriteLine($"[4] login      : token={loginA.Token[..12]}…");
 
-    // 6) 令牌校验
+    // 5) 令牌校验
     var me = await api.GetMeAsync(loginA.Token);
     if (me is null || me.Email != emailA) throw new Exception("[x] /v1/me 校验失败");
-    Console.WriteLine($"[6] /v1/me    : {me.Email} / {me.Nickname} ✔");
+    Console.WriteLine($"[5] /v1/me    : {me.Email} / {me.Nickname} ✔");
 
     var bad = await api.GetMeAsync("invalid-token");
     if (bad is not null) throw new Exception("[x] 无效令牌竟然通过校验");
-    Console.WriteLine($"[7] 无效令牌   : 已拒绝 ✔");
+    Console.WriteLine($"[6] 无效令牌   : 已拒绝 ✔");
 
-    // 8) 第二个账号 + 好友链路
-    var sentB = await api.SendCodeAsync(emailB);
-    var userB = await api.RegisterAsync(emailB, sentB.Code!, password, "自测B");
-    Console.WriteLine($"[8] 第二账号   : {userB.Email} / {userB.Nickname}");
+    // 7) 第二个账号 + 好友链路
+    var userB = await api.RegisterAsync(emailB, password, "自测B");
+    Console.WriteLine($"[7] 第二账号   : {userB.Email} / {userB.Nickname}");
 
     await api.FriendAddAsync(loginA.Token, emailB);
-    Console.WriteLine($"[9] 添加好友   : ok");
+    Console.WriteLine($"[8] 添加好友   : ok");
 
     try
     {
@@ -287,18 +290,58 @@ async Task RunAuthSelfTest(string baseUrl)
     }
     catch (StudioApiException ex) when (ex.StatusCode == 409)
     {
-        Console.WriteLine($"[10] 重复添加  : 已拒绝 ✔");
+        Console.WriteLine($"[9] 重复添加  : 已拒绝 ✔");
     }
 
     var friends = await api.FriendListAsync(loginA.Token);
     if (friends.Count != 1 || friends[0].Nickname != "自测B")
         throw new Exception($"[x] 好友列表不符合预期: {friends.Count}");
-    Console.WriteLine($"[11] 好友列表  : {friends[0].Nickname} ({friends[0].Email}) ✔");
+    Console.WriteLine($"[10] 好友列表  : {friends[0].Nickname} ({friends[0].Email}) ✔");
 
     await api.FriendRemoveAsync(loginA.Token, emailB);
     var empty = await api.FriendListAsync(loginA.Token);
     if (empty.Count != 0) throw new Exception("[x] 删除好友后列表非空");
-    Console.WriteLine($"[12] 删除好友  : 列表已清空 ✔");
+    Console.WriteLine($"[11] 删除好友  : 列表已清空 ✔");
 
     Console.WriteLine("== 账号/好友链路自测全部通过 ==");
+}
+
+/// <summary>证书判定自测：拿 --tls 给的那张根去连给定的 https 地址，走的是生产同一份
+/// ServerTrust.Validate。由 _test_tls_server.py 逐场景驱动（换服务器证书、换信任的根），
+/// 所以这里只报告成/败，不在代码里写死期望。</summary>
+static async Task<int> RunTlsCheck(string url, string caPath)
+{
+    X509Certificate2? root = null;
+    if (caPath != "-")
+    {
+        // "-" 表示用内置那张生产根：测试台因此能同时验「锁定生效」与「换了根就拒」
+        try
+        {
+            root = X509CertificateLoader.LoadCertificateFromFile(caPath);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"TLS_BAD_INPUT 根证书读不出来: {e.Message}");
+            return 2;
+        }
+    }
+    var host = new Uri(url).Host;
+    using var handler = new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = (_, cert, _, errors) =>
+            ServerTrust.Validate(host, cert, errors, root)
+    };
+    using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+    try
+    {
+        var text = (await http.GetStringAsync(url)).Trim();
+        Console.WriteLine($"TLS_OK {text}");
+        return 0;
+    }
+    catch (Exception e)
+    {
+        var inner = e.InnerException ?? e;
+        Console.WriteLine($"TLS_FAIL {inner.GetType().Name}: {e.Message} {inner.Message}");
+        return 1;
+    }
 }

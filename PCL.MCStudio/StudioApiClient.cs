@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net.Http.Headers;
+using System.Security.Authentication;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -107,7 +108,22 @@ public sealed class StudioApiClient : IDisposable
     public StudioApiClient(StudioConfig config)
     {
         BaseUrl = config.BaseUrl;
-        _http = new HttpClient { BaseAddress = new Uri(BaseUrl + "/") , Timeout = TimeSpan.FromSeconds(15)};
+        var secure = BaseUrl.StartsWith("https", StringComparison.OrdinalIgnoreCase);
+        var host = new Uri(BaseUrl).Host;
+        // 口令、玩家令牌、好友与信令都走这条链路。https 时证书必须过 ServerTrust：
+        // 校验不过就直接失败，**不回落明文**——一旦允许回落，中间人只要掐掉 TLS
+        // 端口就能把口令捞回明文，这道防线等于没建。http 配置是老客户端的现状，
+        // 保持可用（它们还不认识这张根），等明文流量归零再收口。
+        var http = secure
+            ? new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (_, cert, _, errors) =>
+                    ServerTrust.Validate(host, cert, errors)
+            })
+            : new HttpClient();
+        http.BaseAddress = new Uri(BaseUrl + "/");
+        http.Timeout = TimeSpan.FromSeconds(15);
+        _http = http;
         if (!string.IsNullOrEmpty(config.Key))
             _http.DefaultRequestHeaders.Add("X-Auth-Token", config.Key);
     }
@@ -538,6 +554,15 @@ public sealed class StudioApiClient : IDisposable
                         string.IsNullOrWhiteSpace(msg) ? $"HTTP {(int)resp.StatusCode}" : msg!);
                 }
                 return doc;
+            }
+            // 证书被拒不会因为多试两次就变可信：重试只会让玩家停在转圈上，
+            // 所以这条要排在通用网络重试前面，直接给一句看得懂的话。
+            // 常见成因有两种：有人在中间动手脚，或本机系统时间离谱（证书有效期判不过）。
+            catch (HttpRequestException ex) when (ex.InnerException is AuthenticationException)
+            {
+                throw new StudioApiException(0,
+                    "联机服务器证书校验未通过：可能被中间拦截，或本机系统时间不准。"
+                    + "请校准时间后重试，仍然不行请到群里反馈。");
             }
             // HttpRequestMessage 不能复用：重试必须经 factory 重建请求
             catch (Exception ex) when (attempt < 3 && !ct.IsCancellationRequested

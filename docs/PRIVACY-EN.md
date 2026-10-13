@@ -1,6 +1,6 @@
 # PClonline Privacy Policy
 
-Last updated: 2026-10-11
+Last updated: 2026-10-13
 
 PClonline ("this launcher") is an open-source Minecraft launcher based on PCL2-CE, providing player-hosted P2P multiplayer. This policy explains what we collect, why, where it is stored, and what rights you have.
 
@@ -14,6 +14,7 @@ The launcher is maintained by an individual developer. The server is located in 
 - **Email address** — used as the unique account identifier.
 - **Nickname** — up to 7 characters, **used only for display in your friends list**. It is not used for lookup and is not required to be unique.
 - **Password** — never stored in plaintext. Passwords are hashed with scrypt (n=2^14, r=8, p=1) using a per-account random salt. Nobody, including the operator, can recover your password from the database.
+- **How your password travels** — from **v50.12.0** onward, registration, login, friends and multiplayer signaling reach our server over **TLS**. The certificate is issued by our own root and pinned to the server's IP address; the client trusts only that root and does not rely on the system trust store. **If you are on an earlier version, your login password still crosses the network as unencrypted HTTP**, and anyone on the same network (e.g. a public Wi-Fi hotspot) may be able to capture it. Please update.
 
 ### Sessions
 - A random session token is issued on login; only its SHA-256 hash is stored, valid for 30 days.
@@ -33,7 +34,15 @@ To operate and debug P2P connectivity, the server records:
 - **Room information**: room code, host, member list, Minecraft server address and MOTD.
 
 ### Automatic updates
-The launcher checks and downloads updates from GitHub Releases. That request exposes your IP address and client version to GitHub. It does not pass through our servers.
+Checking for updates contacts **our server first**, which serves a small (~16 KB) update manifest; GitHub is only used as a fallback. The update package itself is always downloaded from GitHub Releases and never passes through our server. As a result:
+
+- our server sees your **IP address, the manifest requested and the time of the request**;
+- when falling back to GitHub, GitHub sees your IP address and the client version being downloaded.
+
+The manifest is ECDSA-signed, so a compromised server cannot substitute a forged one. We do not use this request for advertising, analytics or profiling.
+
+### Server access logs
+Our server writes one access-log line per API request, containing the **source IP address, the request path and the response status**, into the system journal. It is used solely for rate-limit triage and abuse investigation, is retained under the default journal policy (up to roughly three months) and is not repurposed.
 
 ---
 

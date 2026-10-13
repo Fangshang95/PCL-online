@@ -1,6 +1,6 @@
 # PClonline 隐私政策
 
-最近更新：2026-10-11
+最近更新：2026-10-13
 
 PClonline（下称"本启动器"）是基于 PCL2-CE 的开源 Minecraft 启动器，提供玩家自建的 P2P 联机功能。本政策说明我们收集什么、为什么收集、存在哪里、以及你有什么权利。
 
@@ -14,6 +14,7 @@ PClonline（下称"本启动器"）是基于 PCL2-CE 的开源 Minecraft 启动�
 - **电子邮箱**：作为账号唯一标识。
 - **昵称**：最多 7 个字，**仅用于好友列表显示**，不参与任何查找，不要求唯一。
 - **密码**：服务器**不保存明文**。密码使用 scrypt（n=2^14, r=8, p=1）配合每个账号独立的随机盐值进行单向哈希后存储，任何人都无法从数据库还原你的密码。
+- **密码在网络上的传输方式**：自 **v50.12.0** 起，注册、登录、好友与联机信令全部经 **TLS 加密**后送达我们的服务器（证书为我方自签根签发、地址锁定到服务器 IP，客户端只信任这一张根，不依赖系统信任库）。**使用更早版本的你，登录口令仍以未加密的 HTTP 明文传输**，同一网络内的他人（如公共 Wi-Fi 热点）有可能截获；请尽快更新。老版本无法直接切断，因为它的地址已随包分发，我们会持续引导更新。
 
 ### 2. 登录会话
 - 登录成功后服务器发放一个随机会话令牌；数据库里只保存该令牌的 SHA-256 哈希，有效期 30 天。
@@ -33,7 +34,17 @@ PClonline（下称"本启动器"）是基于 PCL2-CE 的开源 Minecraft 启动�
 - **房间信息**：房间码、房主、成员列表、Minecraft 服务器地址与公告（MOTD）。
 
 ### 5. 自动更新
-本启动器会从 GitHub Releases 检查并下载更新。该网络访问会向 GitHub 暴露你的 IP 地址与所下载的客户端版本。此过程不经过我们的服务器。
+检查更新时会**先访问我们的服务器**，取一份约 16 KB 的更新清单；只有取不到时才回落 GitHub。
+更新包本体固定从 GitHub Releases 下载，不经过我们的服务器。因此：
+
+- 我们的服务器会看到你的 **IP 地址、所请求的清单与访问时间**；
+- 回落到 GitHub 时，GitHub 会看到你的 IP 地址与所下载的客户端版本。
+
+这份清单带 ECDSA 签名，服务器被攻破也无法替换成伪造版本。我们不会用这次访问做投放、统计或画像。
+
+### 6. 服务器访问日志
+我们的服务器会为每个 API 请求写一行访问日志，内容包含**来源 IP 地址、请求路径与响应状态码**，
+保存在服务器的系统日志中，仅用于限流排障与滥用追查；按系统默认保留策略存放（最长约三个月），不做二次利用。
 
 ---
 
@@ -88,9 +99,12 @@ PClonline（下称"本启动器"）是基于 PCL2-CE 的开源 Minecraft 启动�
 | 本政策所述 | 代码位置 |
 | --- | --- |
 | 密码 scrypt 加盐哈希 | `tunnel_server.py` `_scrypt()` / `_new_salt()` |
+| 口令与信令经 TLS 传输、证书锁定到服务器 IP | `PCL.MCStudio/ServerTrust.cs`、`StudioApiClient` 构造处 |
 | 会话只存哈希、30 天、单设备 | `_issue_token()`、`_SESSION_TTL` |
 | 设备识别码本机哈希、服务器二次 HMAC | 客户端 `PCL.Core/Utils/Secret/Identify.cs`；服务端 `_device_hash()` |
 | 令牌本机 DPAPI 加密 | `PCL.MCStudio/StudioAccount.cs` |
 | 遥测已停用 | `PCL.Core/App/Essentials/TelemetryService.cs` `ReportException()` 空实现 |
 | 账号自助注销全链清除 | `POST /v1/account/delete` |
 | 昵称 ≤7 且仅显示 | `_normalize_nickname()` / `_valid_nickname()` |
+| 更新清单先走自建源、GitHub 兜底 | `HotUpdateService.ManifestUrls()` / 引导器 `UpdateService.ManifestUrls()` |
+| 服务器访问日志含来源 IP | `tunnel_server.py` `log_message()` |
