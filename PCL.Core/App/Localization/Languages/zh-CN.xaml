@@ -2399,10 +2399,6 @@
 
     <!-- Setup.About -->
 
-    <sys:String x:Key="Setup.About.Community.Info">Plain Craft Launcher Community Edition 的开发团队！</sys:String>
-    <sys:String x:Key="Setup.About.Community.Name">PCL Community</sys:String>
-    <sys:String x:Key="Setup.About.Contributors.Title">贡献者们</sys:String>
-    <sys:String x:Key="Setup.About.Contributors.ViewMore">查看更多</sys:String>
     <sys:String x:Key="Setup.About.Error.LoadContributorsFailed">加载贡献者信息失败</sys:String>
     <sys:String x:Key="Setup.About.GitHubHome">GitHub 主页</sys:String>
     <sys:String x:Key="Setup.About.Licenses.Title">许可与版权声明</sys:String>
@@ -2410,8 +2406,6 @@
     <sys:String x:Key="Setup.About.Licenses.ViewWebsite">查看来源网站</sys:String>
     <sys:String x:Key="Setup.About.OriginalAuthor.Info">Plain Craft Launcher 的原作者！</sys:String>
     <sys:String x:Key="Setup.About.OriginalAuthor.Name">龙腾猫跃</sys:String>
-    <sys:String x:Key="Setup.About.SourceCode">查看源代码</sys:String>
-    <sys:String x:Key="Setup.About.SponsorOriginalAuthor">赞助原作者</sys:String>
     <sys:String x:Key="Setup.About.Title">关于</sys:String>
     <sys:String x:Key="Setup.About.UpstreamLegal.CopyrightText">Copyright © 龙腾猫跃 2016. All Rights Reserved.&#xD;计算机软件著作权登记号：2020SR0875133&#xD;违法违规行为举报投诉邮箱：hexdragon@vip.qq.com&#xD;非 MINECRAFT 官方产品。未经 MOJANG 或 MICROSOFT 批准，也不与 MOJANG 或 MICROSOFT 关联。</sys:String>
     <sys:String x:Key="Setup.About.UpstreamLegal.OpenSource">开源代码</sys:String>
@@ -2460,57 +2454,20 @@
 
     <!-- Setup.About.SpecialThanks -->
 
-    <sys:String x:Key="Setup.About.SpecialThanks.GoBlog">转到博客</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Bmclapi">提供 BMCLAPI 镜像源和 Forge 安装工具，详见 https://bmclapi.bangbang93.com</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Cloud">提供了 PCL CE 的相关云服务</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.IconDesign">设计并制作了 PCL CE 的图标</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcim">提供了 MCIM 中国模组下载镜像源和帮助库图床！</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcmod">提供了模组名称的中文翻译和更多相关信息！</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Bangbang93">bangbang93</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Emperormummy">Emperormummy</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Mcmod">MC 百科</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Pysio">Pysio @ Akaere Network</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Yunmoan">云默安 @ 至远光辉</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Z0z0r4">z0z0r4</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.OpenMcmod">打开百科</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.OpenWebsite">打开网站</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.SponsorMirror">赞助镜像源</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Title">特别鸣谢</sys:String>
 
     <!-- Setup.Feedback -->
 
-    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Submit.Action">反馈</sys:String>
-    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Submit.Message">{0}&#xA;&#xA;是否反馈此问题？如果不反馈，这个问题可能永远无法得到解决！</sys:String>
-    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Update.Message">{0}&#xA;&#xA;将 PCL CE 更新至最新版或许可以解决这个问题。</sys:String>
+    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Update.Message">{0}&#xA;&#xA;如需排查，请导出日志后联系开发者：设置 → 查看日志 → 导出全部日志</sys:String>
     <sys:String x:Key="Setup.Feedback.Item.Submitter">提交者：{0}（{1}）</sys:String>
     <sys:String x:Key="Setup.Feedback.Item.Type">类型：{0}</sys:String>
     <sys:String x:Key="Setup.Feedback.Item.ViewDetail">查看详情</sys:String>
     <sys:String x:Key="Setup.Feedback.LoadFailed">无法获取到内容</sys:String>
     <sys:String x:Key="Setup.Feedback.Loading">正在获取反馈列表</sys:String>
-    <sys:String x:Key="Setup.Feedback.Reminder.Message">若要汇报 Bug，请点击“打开文件夹”并上传 Launch-{0}-[一串数字].log 中包含错误信息的文件。&#xA;&#xA;游戏崩溃一般与启动器无关，请不要因为游戏崩溃而提交启动器反馈。</sys:String>
-    <sys:String x:Key="Setup.Feedback.Reminder.NotNeeded">不需要</sys:String>
-    <sys:String x:Key="Setup.Feedback.Reminder.Title">反馈提交提醒</sys:String>
-    <sys:String x:Key="Setup.Feedback.Submit.Description">在提交反馈之前，先查找一下是否存在重复反馈，如果有重复反馈，那么请不要再次提交反馈，这样会加剧维护者的负担……&#xA;注意：此页面未展示所有的反馈，如需查看更多反馈，请前往 GitHub。</sys:String>
     <sys:String x:Key="Setup.Feedback.Submit.Open">前往反馈</sys:String>
-    <sys:String x:Key="Setup.Feedback.Submit.Title">提交反馈</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.CheckFailed.Action">重新检查更新</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.CheckFailed.Message">检查更新失败，因此无法提交反馈。&#xA;请连接互联网，检查更新后确认该问题在最新版中依然存在，再提交反馈。</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.NotLatest.Action">更新</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.NotLatest.Message">当前 PCL CE 不是最新版，因此无法提交反馈。&#xA;请更新后确认该问题在最新版中依然存在，再提交反馈。</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.Title">无法提交反馈</sys:String>
     <sys:String x:Key="Setup.Feedback.Uncategorized">未分类</sys:String>
 
     <!-- Setup.Feedback.Status -->
 
-    <sys:String x:Key="Setup.Feedback.Status.Completed">已完成</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Declined">已拒绝</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Duplicate">重复</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Ignored">已忽略</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Paused">暂停</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Processing">正在处理</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.UpNext">在即</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Waiting">等待</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.WaitingProcess">等待处理</sys:String>
 
     <!-- Setup.GameManage -->
 
@@ -2608,13 +2565,6 @@
     <sys:String x:Key="Setup.Language.FormatCulture">区域格式</sys:String>
     <sys:String x:Key="Setup.Language.FormatCulture.Auto">跟随系统区域格式</sys:String>
     <sys:String x:Key="Setup.Language.FormatCulture.FollowLanguage">同步界面语言</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.TitlePrefix">让</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.TitleSuffix">走向国际化。</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.DescriptionLine1">在社区的共同助力下，PCL CE 正迈向国际化的新篇章。</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.DescriptionLine2">欢迎前往翻译平台参与本地化贡献，或向 GitHub 仓库提交 Pull Request，与我们一同完善多语言支持，为 PCL CE 更好地服务全球用户的目标添砖加瓦。</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.DescriptionLine3">感谢每一位参与翻译、校对与改进的贡献者，让 PCL CE 因你们而更加完善。</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.TranslateWebsite">前往翻译平台</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.SubmitPullRequest">提交 Pull Request</sys:String>
     <sys:String x:Key="Setup.Language.Reset.Success">已初始化语言页设置！</sys:String>
     <sys:String x:Key="Setup.Language.Title">语言</sys:String>
     <sys:String x:Key="Setup.Language.UiLanguage">界面语言</sys:String>
@@ -2753,7 +2703,6 @@
     <!-- Setup.Left.Item -->
 
     <sys:String x:Key="Setup.Left.Item.About">软件信息</sys:String>
-    <sys:String x:Key="Setup.Left.Item.Feedback">反馈</sys:String>
     <sys:String x:Key="Setup.Left.Item.GameManage">管理</sys:String>
     <sys:String x:Key="Setup.Left.Item.Java">Java</sys:String>
     <sys:String x:Key="Setup.Left.Item.Launch">启动</sys:String>
@@ -2949,7 +2898,6 @@
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.Export">导出</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.FeatureHide">功能隐藏</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.FeatureHide.ToolTip">仅隐藏本选项卡，设置的禁用内容依然有效。&#xA;可以在保留个性化设置页面的情况下避免隐藏设置被修改。</sys:String>
-    <sys:String x:Key="Setup.Ui.FeatureHide.Item.Feedback">反馈</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.GameManage">管理</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.InstanceSelect">实例管理</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.InstanceSelect.ToolTip">隐藏启动按钮下方的实例选择与实例设置入口。</sys:String>
@@ -3132,7 +3080,7 @@
 
     <sys:String x:Key="SystemDialog.Browser.OpenFailed.Message">PCL CE 无法打开此网页。网址已复制到剪贴板，可手动粘贴访问。&#xA;&#xA;网址：{0}</sys:String>
     <sys:String x:Key="SystemDialog.Browser.OpenFailed.Title">无法打开网页</sys:String>
-    <sys:String x:Key="SystemDialog.Fatal.Message.WithFeedbackGuidance">{0}&#xA;&#xA;如果你认为这是启动器的问题，请提交反馈，以便开发者调查。&#xA;导出日志：设置 → 查看日志 → 导出全部日志</sys:String>
+    <sys:String x:Key="SystemDialog.Fatal.Message.WithFeedbackGuidance">{0}&#xA;&#xA;如果你认为这是启动器的问题，请导出日志后联系开发者。&#xA;导出日志：设置 → 查看日志 → 导出全部日志</sys:String>
     <sys:String x:Key="SystemDialog.Fatal.Title">致命错误</sys:String>
     <sys:String x:Key="SystemDialog.File.AllFilesFilter">所有文件|*.*</sys:String>
     <sys:String x:Key="SystemDialog.File.OpenFailed.Message">无法打开文件或程序。&#xA;&#xA;路径：{0}</sys:String>
@@ -3177,6 +3125,9 @@
     <sys:String x:Key="Tools.Studio.Account.NicknameHint">昵称（最多 7 个字，仅用于好友列表显示）</sys:String>
     <sys:String x:Key="Tools.Studio.Account.PasswordTip">密码至少 8 位。服务器只保存加盐哈希，不保存明文。</sys:String>
     <sys:String x:Key="Tools.Studio.Account.DevicePrivacyTip">注册将上报本机设备识别码，用于限制同一台设备重复注册；服务器只保存它的不可逆哈希。</sys:String>
+    <sys:String x:Key="Tools.Studio.Account.PrivacyNotice">登录或注册即表示你已阅读并同意《隐私政策》。要点：密码只以 scrypt 加盐哈希保存，服务器不存明文；注册时上报的设备识别码在服务器只留不可逆哈希，仅用于限制批量注册，登录不限设备；本启动器未接入任何第三方统计或崩溃上报（遥测已整体停用）。注意：同一房间的其他玩家可见你的邮箱账号，建议不要用主力私人邮箱注册。</sys:String>
+    <sys:String x:Key="Tools.Studio.Account.PrivacyLink">查看《隐私政策》全文（随包离线可读）</sys:String>
+    <sys:String x:Key="Tools.Studio.Account.PrivacyTitle">隐私政策</sys:String>
     <sys:String x:Key="Tools.Studio.Account.Login">登录</sys:String>
     <sys:String x:Key="Tools.Studio.Account.Register">注册并登录</sys:String>
     <sys:String x:Key="Tools.Studio.Account.GoRegister">还没有账号？注册一个</sys:String>

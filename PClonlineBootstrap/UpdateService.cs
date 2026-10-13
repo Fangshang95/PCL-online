@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -50,18 +51,93 @@ internal static class UpdateService
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(60) };
 
+    /// <summary>
+    /// GitHub Releases 兜底源。清单源配置无论出什么问题（缺失、写错、自建源宕机）都还会
+    /// 追加这一条，玩家不至于彻底收不到更新；27MB 的 app.zip 也固定从这里下。
+    /// </summary>
+    public const string GithubManifest =
+        "https://github.com/Fangshang95/PCL-online/releases/latest/download/version.json";
+
+    /// <summary>随包下发的清单源配置文件名（一行一个 URL，# 开头为注释）。</summary>
+    private const string SourcesFileName = "update-sources.txt";
+
+    /// <summary>
+    /// 拉清单（含验签）所有源共用的总预算。HttpClient 那个 60 分钟超时是给更新包用的，
+    /// 清单不能吃它——否则自建源宕机时玩家双击 exe 要干等半天才看到启动器界面。
+    /// </summary>
+    private const int ManifestBudgetMs = 15000;
+
+    private const int ManifestTimeoutMs = 8000;
+    private const int SignatureTimeoutMs = 4000;
+
+    /// <summary>
+    /// 实际使用的清单源，按优先级：环境变量 PCL_UPDATE_MANIFEST（多个用分号分隔，便于内网
+    /// 镜像/离线环境与本地验证）→ 随包下发的 update-sources.txt（exe 同级与 app\ 都找）→
+    /// GitHub 兜底。真实自建地址只存在于发布包里，源码树与公开仓库不含任何服务器地址。
+    /// </summary>
+    public static string[] ManifestUrls()
+    {
+        var urls = new List<string>();
+        Collect(urls, Environment.GetEnvironmentVariable("PCL_UPDATE_MANIFEST"), new[] { ';', ',' });
+        Collect(urls, ReadSourcesDisk(), new[] { '\n', '\r', ',', ';' });
+        urls.RemoveAll(u => string.Equals(u, GithubManifest, StringComparison.OrdinalIgnoreCase));
+        urls.Add(GithubManifest);
+        return urls.ToArray();
+    }
+
+    private static void Collect(List<string> into, string? text, char[] separators)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        foreach (var raw in text.Split(separators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var url = raw.Trim();
+            if (url.Length == 0 || url.StartsWith("#")) continue;
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!into.Contains(url, StringComparer.OrdinalIgnoreCase)) into.Add(url);
+        }
+    }
+
+    private static string? ReadSourcesDisk()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        foreach (var dir in new[] { baseDir, Path.Combine(baseDir, Program.AppDirName) })
+        {
+            try
+            {
+                var path = Path.Combine(dir, SourcesFileName);
+                if (File.Exists(path)) return File.ReadAllText(path);
+            }
+            catch
+            {
+                // 读不到就继续往下兜底
+            }
+        }
+        return null;
+    }
+
+    /// <summary>带超时地取一个小文件（清单与签名）；更新包下载不走这里，仍用长超时。</summary>
+    private static async Task<byte[]> GetWithBudgetAsync(string url, int timeoutMs)
+    {
+        using var cts = new CancellationTokenSource(timeoutMs);
+        return await Http.GetByteArrayAsync(url, cts.Token).ConfigureAwait(false);
+    }
+
     /// <summary>拉清单并执行更新。返回解析后的清单（供运行时安装复用），没拿到就返回 null。</summary>
     public static async Task<UpdateManifest?> RunAsync(string appDir, IReadOnlyList<string> manifestUrls,
-                                                       Action<string> log)
+                                                       Action<string> log, string? embeddedVer = null)
     {
         // 声明在 try 外：catch 之后还要把它交给运行时安装器
         UpdateManifest? manifest = null;
         try
         {
-            manifest = await FetchManifestAsync(manifestUrls, log);
+            var localVer = LocalVersion(appDir);
+            // 地板取"本地应用层"与"exe 内嵌"里较高的那个：玩家习惯直接覆盖新 exe，
+            // 覆盖完那一瞬 app\ 还是旧版，只看本地会把刚发来的新版误判成降级
+            var floor = PickFloor(localVer, embeddedVer);
+            manifest = await FetchManifestAsync(manifestUrls, floor, log);
             if (manifest is null) { log("未能获取更新清单，跳过更新"); return null; }
 
-            var localVer = LocalVersion(appDir);
             if (!string.IsNullOrEmpty(localVer) && localVer == manifest.Version)
             {
                 log("已是最新版本：" + manifest.Version);
@@ -138,35 +214,119 @@ internal static class UpdateService
         log($"已覆盖 {count} 个文件到 app\\");
     }
 
-    private static async Task<UpdateManifest?> FetchManifestAsync(IReadOnlyList<string> urls, Action<string> log)
+    /// <summary>
+    /// 拉清单。floor 是"不许降到的地板"= max(本地应用层版本, exe 内嵌版本)：
+    /// 玩家习惯直接覆盖新 exe，覆盖完的那一瞬间 app\ 里还是旧版，只看本地会把刚发来的
+    /// 新版当成"要降级"而拒绝。清单来自哪个源都一样——降级不是补救手段，
+    /// 坏版本靠往前发一版修复，不靠把玩家退回去。
+    /// </summary>
+    private static async Task<UpdateManifest?> FetchManifestAsync(IReadOnlyList<string> urls,
+                                                                  string? floor, Action<string> log)
     {
+        var sw = Stopwatch.StartNew();
         foreach (var url in urls)
         {
+            var left = ManifestBudgetMs - (int)sw.ElapsedMilliseconds;
+            if (left < 1000)
+            {
+                log("拉清单的时间预算已用完，剩余的源不再尝试（不影响启动）");
+                break;
+            }
+            // 明文 HTTP 源在链路上可能被改包，必须验过签名才采信；HTTPS 源保留过渡期兼容
+            var plainHttp = url.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
             try
             {
-                var bytes = await Http.GetByteArrayAsync(url);
-                // 签名：与清单同名的 .sig。取到就必须验过，取不到（旧源/404）只警告——
-                // 兼顾"逐步上线签名"的过渡期，但一旦源提供签名就不再接受未过验的内容。
-                var sig = await TryFetchSignatureAsync(url + ".sig", log);
-                if (sig is not null && !VerifyManifest(bytes, sig, log))
+                var bytes = await GetWithBudgetAsync(url,
+                    Math.Min(ManifestTimeoutMs, left)).ConfigureAwait(false);
+                left = ManifestBudgetMs - (int)sw.ElapsedMilliseconds;
+                // 签名：与清单同名的 .sig。取到就必须验过；取不到时 HTTPS 源只警告（兼容
+                // 逐步上线签名的过渡期），明文源直接弃用——否则一个改包就能把玩家带到任意版本。
+                var sig = await TryFetchSignatureAsync(url + ".sig",
+                    Math.Max(1000, Math.Min(SignatureTimeoutMs, left)), log).ConfigureAwait(false);
+                if (sig is null)
+                {
+                    if (plainHttp)
+                    {
+                        log("明文源没有可用签名，忽略该源：" + url);
+                        continue;
+                    }
+                }
+                else if (!VerifyManifest(bytes, sig, log))
                 {
                     log("清单签名校验失败，忽略该源：" + url);
                     continue;
                 }
                 var m = ParseManifest(bytes);   // 不用 JsonSerializer：full trim 下会 IL2026 失效
-                if (m is not null) { log("已获取清单：" + url); return m with { SourceUrl = url }; }
+                if (m is null) continue;
+                // 严格禁降级，对所有源一视同仁（GitHub 也不豁免）。
+                // 实测过两种事故：镜像里残留的旧清单（签名有效、包 sha256 也自洽，完整性检查
+                // 全部放行，会把 app\ 覆盖成几百个文件的远古版）；以及线上 latest 落后于本地构建时
+                // 新 exe 一启动就把自己刷回旧版。真要救坏版本，办法是往前发修复版，不是往回退。
+                if (IsOlder(m.Version, floor))
+                {
+                    log($"清单版本不高于本地（{m.Version} ≤ {floor ?? "未知"}），忽略：{url}");
+                    continue;
+                }
+                log("已获取清单：" + url);
+                return m with { SourceUrl = url };
             }
             catch (Exception ex) { log("清单源不可用（" + url + "）：" + ex.Message); }
         }
         return null;
     }
 
-    private static async Task<byte[]?> TryFetchSignatureAsync(string url, Action<string> log)
+    /// <summary>取两个版本里较高的那个作地板；有一边读不出来就用另一边（别让空值把护栏关掉）。</summary>
+    private static string? PickFloor(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(a)) return b;
+        if (string.IsNullOrWhiteSpace(b)) return a;
+        return IsOlder(a, b) ? b : a;
+    }
+
+    /// <summary>粗粒度版本比较：只比主/次/修订三段数字，比不出就当作"不算更旧"。</summary>
+    private static bool IsOlder(string? a, string? b)
+    {
+        var x = VersionParts(a);
+        var y = VersionParts(b);
+        if (x is null || y is null) return false;
+        for (var i = 0; i < 3; i++)
+        {
+            var c = x[i].CompareTo(y[i]);
+            if (c != 0) return c < 0;
+        }
+        return false;
+    }
+
+    private static int[]? VersionParts(string? v)
+    {
+        if (string.IsNullOrWhiteSpace(v)) return null;
+        var s = v.Trim().TrimStart('v', 'V');
+        var cut = s.Length;
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (!char.IsDigit(s[i]) && s[i] != '.')
+            {
+                cut = i;   // 50.11.19-alpha 按 50.11.19 比
+                break;
+            }
+        }
+        var pieces = s[..cut].Split('.');
+        var parts = new int[3];
+        for (var i = 0; i < 3 && i < pieces.Length; i++)
+        {
+            if (!int.TryParse(pieces[i], out var n)) return null;
+            parts[i] = n;
+        }
+        return parts;
+    }
+
+    private static async Task<byte[]?> TryFetchSignatureAsync(string url, int timeoutMs, Action<string> log)
     {
         try
         {
             // 文件里放的是 base64 文本，验签要的是签名原始字节
-            var text = System.Text.Encoding.UTF8.GetString(await Http.GetByteArrayAsync(url)).Trim();
+            var text = System.Text.Encoding.UTF8.GetString(
+                await GetWithBudgetAsync(url, timeoutMs).ConfigureAwait(false)).Trim();
             return Convert.FromBase64String(text);
         }
         catch (Exception ex)

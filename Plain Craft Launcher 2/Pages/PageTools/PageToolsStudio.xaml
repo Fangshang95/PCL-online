@@ -67,6 +67,14 @@
                                                 Click="BtnShowLogin_Click" />
                         </Grid>
                     </StackPanel>
+
+                    <StackPanel Margin="0,16,0,0" Orientation="Vertical">
+                        <TextBlock Text="{DynamicResource Tools.Studio.Account.PrivacyNotice}" TextWrapping="Wrap"
+                                   FontSize="12" Opacity="0.7" Style="{StaticResource BasedOnTextBlock}" />
+                        <local:MyTextButton x:Name="BtnPrivacy" Margin="0,4,0,0" HorizontalAlignment="Left"
+                                            Text="{DynamicResource Tools.Studio.Account.PrivacyLink}"
+                                            Click="BtnPrivacy_Click" />
+                    </StackPanel>
                 </StackPanel>
             </local:MyCard>
 

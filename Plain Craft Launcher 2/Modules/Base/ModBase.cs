@@ -3522,31 +3522,13 @@ public static class ModBase
         if (isCritical)
             isCriticalErrorTriggered = true;
 
-        if (CanFeedback(false))
-        {
-            var message = Lang.Text("Setup.Feedback.ErrorPrompt.Submit.Message", userMessage);
-            var shouldSend = isCritical
-                ? Interaction.MsgBox(
-                    message,
-                    (MsgBoxStyle)((int)MsgBoxStyle.Critical + (int)MsgBoxStyle.YesNo),
-                    title) == MsgBoxResult.Yes
-                : ModMain.MyMsgBox(
-                    message,
-                    title,
-                    Lang.Text("Setup.Feedback.ErrorPrompt.Submit.Action"),
-                    Lang.Text("Common.Action.Cancel"),
-                    isWarn: true) == 1;
-
-            if (shouldSend)
-                Feedback(false, true);
-            return;
-        }
-
-        var updateMessage = Lang.Text("Setup.Feedback.ErrorPrompt.Update.Message", userMessage);
+        // 反馈子系统已随「提交反馈」页面一并移除：错误只落本地日志，
+        // 由用户自行「设置 → 查看日志 → 导出全部日志」后联系开发者。
+        var message = Lang.Text("Setup.Feedback.ErrorPrompt.Update.Message", userMessage);
         if (isCritical)
-            Interaction.MsgBox(updateMessage, MsgBoxStyle.Critical, title);
+            Interaction.MsgBox(message, MsgBoxStyle.Critical, title);
         else
-            ModMain.MyMsgBox(updateMessage, title, isWarn: true);
+            ModMain.MyMsgBox(message, title, isWarn: true);
     }
 
     public static string Base64Decode(string text)
@@ -3569,29 +3551,6 @@ public static class ModBase
     }
 
     // 反馈
-    public static void Feedback(bool showMsgbox = true, bool forceOpenLog = false)
-    {
-        // On Error Resume Next
-        FeedbackInfo();
-        var currentDate = DateTime.Now.ToString("yyyy-M-dd", CultureInfo.InvariantCulture);
-
-        if (forceOpenLog || (showMsgbox &&
-                             ModMain.MyMsgBox(
-                                 Lang.Text("Setup.Feedback.Reminder.Message", currentDate),
-                                 Lang.Text("Setup.Feedback.Reminder.Title"),
-                                 Lang.Text("Common.Action.OpenFolder"),
-                                 Lang.Text("Setup.Feedback.Reminder.NotNeeded")) ==
-                             1)) OpenExplorer(exePath + @"PCL\Log\");
-        // MCStudio 定制版：不再跳转社区反馈渠道（GitHub Issues），仅保留本地日志
-    }
-
-    public static bool CanFeedback(bool showHint)
-    {
-        // MCStudio 定制版：社区反馈渠道已停用（错误只落本地日志），
-        // 不再依赖"是否最新版本"来放行，因此这里恒为 false
-        return false;
-    }
-
     /// <summary>
     ///     在日志中输出系统诊断信息。
     /// </summary>

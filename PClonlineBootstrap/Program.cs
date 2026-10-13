@@ -22,25 +22,10 @@ internal static class Program
     private const string ResourceName = "PClonlineBootstrap.app.zip";
 
     /// <summary>
-    /// 更新清单唯一来源：GitHub Releases（客户端只认这一个源）。
-    /// 自建更新服务器（/v1/update/manifest）已连同它的分发功能一起下线。
+    /// 更新清单源。解析链在 UpdateService 里（与应用层同一套规则）：
+    /// 环境变量 → 磁盘 update-sources.txt → 构建期内嵌资源 → GitHub Releases 兜底。
     /// </summary>
-    private static readonly string[] DefaultManifestUrls =
-    [
-        "https://github.com/Fangshang95/PCL-online/releases/latest/download/version.json",
-    ];
-
-    /// <summary>
-    /// 实际使用的清单源。可用环境变量 PCL_UPDATE_MANIFEST 覆盖（多个用分号分隔），
-    /// 便于自建内网镜像 / 离线环境，也便于本地验证增量链路。
-    /// </summary>
-    private static string[] ManifestUrls()
-    {
-        var env = Environment.GetEnvironmentVariable("PCL_UPDATE_MANIFEST");
-        if (string.IsNullOrWhiteSpace(env)) return DefaultManifestUrls;
-        var list = env.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return list.Length > 0 ? list : DefaultManifestUrls;
-    }
+    private static string[] ManifestUrls() => UpdateService.ManifestUrls();
 
     private static string? _logPath;
 
@@ -122,7 +107,7 @@ internal static class Program
                 // 全量更新（只换 app\，运行时目录不参与；失败一律不阻断启动）
                 var urls = ManifestUrls();
                 Log("更新清单源：" + string.Join(" | ", urls));
-                var manifest = await UpdateService.RunAsync(appDir, urls, Log);
+                var manifest = await UpdateService.RunAsync(appDir, urls, Log, embeddedVer);
 
                 var exe = Path.Combine(appDir, AppExeName);
                 if (!File.Exists(exe))

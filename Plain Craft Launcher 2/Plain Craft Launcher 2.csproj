@@ -119,5 +119,12 @@
     </ItemGroup>
     <ItemGroup>
         <Content Include="LICENCE" />
+        <!-- 隐私政策随包分发：登录页要能离线展示全文（部分玩家访问不了 GitHub） -->
+        <Content Include="..\docs\PRIVACY.md" Link="docs\PRIVACY.md"
+                 CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+        <Content Include="..\docs\PRIVACY-ZH_TW.md" Link="docs\PRIVACY-ZH_TW.md"
+                 CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+        <Content Include="..\docs\PRIVACY-EN.md" Link="docs\PRIVACY-EN.md"
+                 CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
 </Project>

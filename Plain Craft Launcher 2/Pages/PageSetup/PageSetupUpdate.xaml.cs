@@ -6,8 +6,8 @@ namespace PCL;
 
 public partial class PageSetupUpdate
 {
-    /// <summary>热更新通道的最近一次检查结果。</summary>
-    private HotUpdateService.CheckResult _hot;
+    /// <summary>热更新通道的最近一次检查结果（null = 还没检查过、也没有可用缓存）。</summary>
+    private HotUpdateService.CheckResult? _hot;
 
     public PageSetupUpdate()
     {
@@ -22,19 +22,33 @@ public partial class PageSetupUpdate
         ModAnimation.AniControlEnabled += 1;
         TextCurrentVersion.Text = "PClonline " + VersionNameFormat(HotUpdateService.CurrentVersion);
         ModAnimation.AniControlEnabled -= 1;
-        CheckHotUpdate();
+        // 先把上次检查的结果摆出来（启动时后台已经预热过），有结果就不让页面停在"正在检查更新…"上；
+        // 缓存旧于 5 分钟才在后台静默刷新，刷新期间玩家看的是上一次的结果
+        _hot = HotUpdateService.PeekCached();
+        if (_hot is not null) ShowHot(_hot);
+        if (_hot is null || HotUpdateService.CacheIsStale()) CheckHotUpdate(_hot is not null);
     }
 
-    private async void CheckHotUpdate()
+    private async void CheckHotUpdate(bool keepShown = false)
     {
         BtnCheckAgain.IsEnabled = false;
-        BtnChangelog.Visibility = Visibility.Collapsed;
-        TextCurrentDesc.Text = "正在检查更新…";
+        if (!keepShown)
+        {
+            // 没有可显示的结果时才清空画面；静默刷新期间保持原样，
+            // 否则"发现新版本"的文字还挂着，"退出并更新"按钮却先消失了
+            BtnChangelog.Visibility = Visibility.Collapsed;
+            TextCurrentDesc.Text = "正在检查更新…";
+        }
         var result = await HotUpdateService.CheckAsync();
         _hot = result;
         BtnCheckAgain.IsEnabled = true;
         ModBase.Log($"[HotUpdate] 检查完成：ok={result.Ok} local={result.LocalVersion} " +
                      $"remote={result.RemoteVersion} hasUpdate={result.HasUpdate}");
+        ShowHot(result);
+    }
+
+    private void ShowHot(HotUpdateService.CheckResult result)
+    {
         if (!result.Ok)
         {
             TextCurrentDesc.Text = result.Message;
@@ -56,9 +70,9 @@ public partial class PageSetupUpdate
 
     private void RestartForHotUpdate()
     {
-        var hasUpdate = _hot is { HasUpdate: true };
-        var tip = hasUpdate
-            ? "将退出启动器并自动安装更新 " + VersionNameFormat(_hot.RemoteVersion) +
+        var pending = _hot is { HasUpdate: true } ? _hot : null;
+        var tip = pending is not null
+            ? "将退出启动器并自动安装更新 " + VersionNameFormat(pending.RemoteVersion) +
               "，完成后会自动重新打开。\n若未自动重启，重新双击启动器即可。"
             : "将退出启动器并自动检查安装更新，完成后会自动重新打开。";
         if (ModMain.MyMsgBox(tip, "退出并更新", "退出并更新", "取消") == 2) return;

@@ -1,10 +1,6 @@
-using System.Collections.ObjectModel;
-using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Input;
 using PCL.Core.App.Localization;
-using PCL.Core.IO.Net.Http;
-using PCL.Core.Utils;
 
 namespace PCL;
 
@@ -21,8 +17,6 @@ public partial class PageSetupAbout
         Loaded += PageOtherAbout_Loaded;
     }
 
-    public ObservableCollection<GitHubContributor> Contributors { get; set; } = new();
-
     private void PageOtherAbout_Loaded(object sender, RoutedEventArgs e)
     {
         // 重复加载部分
@@ -36,27 +30,6 @@ public partial class PageSetupAbout
         ItemAboutPcl.Info = ItemAboutPcl.Info.Replace("%VERSION%", ModBase.versionBaseName)
             .Replace("%VERSIONCODE%", ModBase.versionCode.ToString()).Replace("%BRANCH%", ModBase.versionBranchName)
             .Replace("%COMMIT_HASH%", ModBase.commitHashShort);
-
-        if (!Lang.IsChineseMainland)
-        {
-            ItemMcmod.Visibility = Visibility.Collapsed;
-            BtnMcmod.Visibility = Visibility.Collapsed;
-            ImgMcmod.Visibility = Visibility.Collapsed;
-            RowMcmod.Height = new GridLength(0);
-        }
-
-        LoadContributersAsync();
-    }
-
-    private async void LoadContributersAsync()
-    {
-        // MCStudio 定制版：不再从社区 GitHub 拉取贡献者列表（页面保持本地内容）
-        await Task.CompletedTask;
-    }
-
-    private void ImgPCLCommunity_Click(object sender, MouseButtonEventArgs e)
-    {
-        ModAnimation.AniStart(new[] { ModAnimation.AaRotateTransform(sender, 360d) });
     }
 
     private void ImgPCLLogo_Click(object sender, MouseButtonEventArgs e)
@@ -174,16 +147,5 @@ public partial class PageSetupAbout
                 ModAnimation.AaTranslateX(sender, -mx, 0, 100), ModAnimation.AaTranslateY(sender, -my, 0, 100)
             });
         }
-    }
-
-    public class GitHubContributor
-    {
-        [JsonPropertyName("login")] public string Login { get; set; }
-
-        [JsonPropertyName("avatar_url")] public string AvatarUrl { get; set; }
-
-        [JsonPropertyName("html_url")] public string HtmlUrl { get; set; }
-
-        [JsonPropertyName("contributions")] public int Contributions { get; set; }
     }
 }

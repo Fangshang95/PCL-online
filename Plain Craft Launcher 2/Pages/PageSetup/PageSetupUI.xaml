@@ -341,9 +341,6 @@
                         <local:MyCheckBox Height="22" VerticalAlignment="Center" Grid.Row="3" Grid.Column="5" Text="{DynamicResource Setup.Ui.FeatureHide.Item.About}"
                                           x:Name="CheckHiddenSetupAbout" Tag="UiHiddenSetupAbout"
                                           Change="CheckBoxChange" />
-                        <local:MyCheckBox Height="22" VerticalAlignment="Center" Grid.Row="3" Grid.Column="6" Text="{DynamicResource Setup.Ui.FeatureHide.Item.Feedback}"
-                                          x:Name="CheckHiddenSetupFeedback" Tag="UiHiddenSetupFeedback"
-                                          Change="CheckBoxChange" />
                         <local:MyCheckBox Height="22" VerticalAlignment="Center" Grid.Row="3" Grid.Column="7"
                                           Text="{DynamicResource Setup.Ui.FeatureHide.Item.Log}" x:Name="CheckHiddenSetupLog" Tag="UiHiddenSetupLog"
                                           Change="CheckBoxChange" />

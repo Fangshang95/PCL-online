@@ -116,7 +116,6 @@ public partial class PageSetupUI
             CheckHiddenLauncherMisc.Checked = uiHidden.SetupLauncherMisc;
             CheckHiddenSetupUpdate.Checked = uiHidden.SetupUpdate;
             CheckHiddenSetupAbout.Checked = uiHidden.SetupAbout;
-            CheckHiddenSetupFeedback.Checked = uiHidden.SetupFeedback;
             CheckHiddenSetupLog.Checked = uiHidden.SetupLog;
 
             // 子页面 工具
@@ -747,9 +746,6 @@ public partial class PageSetupUI
                     !HiddenForceShow && conf.SetupUpdate ? Visibility.Collapsed : Visibility.Visible;
                 ModMain.frmSetupLeft.ItemAbout.Visibility =
                     !HiddenForceShow && conf.SetupAbout ? Visibility.Collapsed : Visibility.Visible;
-                ModMain.frmSetupLeft.ItemFeedback.Visibility = !HiddenForceShow && conf.SetupFeedback
-                    ? Visibility.Collapsed
-                    : Visibility.Visible;
                 ModMain.frmSetupLeft.ItemLog.Visibility =
                     !HiddenForceShow && conf.SetupLog ? Visibility.Collapsed : Visibility.Visible;
 
@@ -759,7 +755,7 @@ public partial class PageSetupUI
                         !(conf.SetupLaunch && conf.SetupJava && conf.SetupGameManage)),
                     (ModMain.frmSetupLeft.TextLauncherCategory, !(conf.SetupUi && conf.SetupLauncherLanguage && conf.SetupLauncherMisc)),
                     (ModMain.frmSetupLeft.TextAboutCategory,
-                        !(conf.SetupAbout && conf.SetupUpdate && conf.SetupFeedback && conf.SetupLog))
+                        !(conf.SetupAbout && conf.SetupUpdate && conf.SetupLog))
                 };
 
                 foreach (var category in categories)
@@ -787,8 +783,6 @@ public partial class PageSetupUI
                 if (!conf.SetupUpdate)
                     setupCount += 1;
                 if (!conf.SetupAbout)
-                    setupCount += 1;
-                if (!conf.SetupFeedback)
                     setupCount += 1;
                 if (!conf.SetupLog)
                     setupCount += 1;
@@ -850,7 +844,6 @@ public partial class PageSetupUI
         CheckHiddenSetupJava.Checked = isChecked;
         CheckHiddenSetupUpdate.Checked = isChecked;
         CheckHiddenSetupAbout.Checked = isChecked;
-        CheckHiddenSetupFeedback.Checked = isChecked;
         CheckHiddenSetupLog.Checked = isChecked;
     }
 
@@ -868,7 +861,6 @@ public partial class PageSetupUI
         CheckHiddenSetupJava.Checked = isChecked;
         CheckHiddenSetupUpdate.Checked = isChecked;
         CheckHiddenSetupAbout.Checked = isChecked;
-        CheckHiddenSetupFeedback.Checked = isChecked;
         CheckHiddenSetupLog.Checked = isChecked;
     }
 
@@ -879,7 +871,7 @@ public partial class PageSetupUI
         var conf = Config.Preference.Hide;
         // 判断是否全部勾选
         var allChecked = conf.SetupLaunch && conf.SetupUi && conf.SetupLauncherLanguage && conf.SetupJava &&
-                         conf.SetupUpdate && conf.SetupAbout && conf.SetupFeedback &&
+                         conf.SetupUpdate && conf.SetupAbout &&
                          conf.SetupLog && conf.SetupLauncherMisc && conf.SetupGameManage;
         CheckHiddenPageSetup.Checked = allChecked;
     }

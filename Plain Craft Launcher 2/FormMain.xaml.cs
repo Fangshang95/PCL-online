@@ -1436,7 +1436,6 @@ public partial class FormMain
         SetupLink = 3,
         SetupAbout = 4,
         SetupLog = 5,
-        SetupFeedback = 6,
         SetupUpdate = 8,
         SetupJava = 9,
         SetupLauncherMisc = 10,

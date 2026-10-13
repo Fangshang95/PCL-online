@@ -13,7 +13,7 @@ public static class UpdateManager
 {
     /// <summary>
     ///     MCStudio 定制版标记：启动器自身的更新只走 HotUpdateService + 引导器
-    ///     （清单 = GitHub Releases 优先、自建服务器兜底），与社区更新源完全无关。
+    ///     （清单源由打包机随包下发，GitHub Releases 恒为兜底源），与社区更新源完全无关。
     ///     旧社区更新链路（Mirror酱 / Pysio / Naids / CE GitHub 源）已于 v50.10.2 整体移除。
     /// </summary>
     public const bool IsMcStudioBuild = true;
@@ -41,9 +41,13 @@ public static class UpdateManager
         return UpdateEnums.VersionStatus.Unknown;
     }
 
-    /// <summary>生命周期占位：社区公告与自动检查已随旧链路移除，此加载器立即完成。</summary>
+    /// <summary>
+    ///     启动器自身更新的后台预热（v50.11.19）：启动时拉一次清单写进缓存，
+    ///     玩家打开设置 → 更新时直接显示结果，不再让页面停在"正在检查更新…"上等网络。
+    ///     缓存还新鲜时不联网。旧社区公告链路已随 v50.10.2 移除。
+    /// </summary>
     public static ModLoader.LoaderTask<int, int> serverLoader =
-        new(Lang.Text("Update.Service.PclCe"), _ => { }, priority: ThreadPriority.BelowNormal);
+        new(Lang.Text("Update.Service.PclCe"), _ => HotUpdateService.Prefetch(), priority: ThreadPriority.BelowNormal);
 
     /// <summary>
     ///     确保 PathTemp 下的 Latest.exe 是最新正式版的 PCL，它会被用于整合包打包。

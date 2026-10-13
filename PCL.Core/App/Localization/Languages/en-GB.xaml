@@ -2399,10 +2399,6 @@
 
     <!-- Setup.About -->
 
-    <sys:String x:Key="Setup.About.Community.Info">The development team of Plain Craft Launcher Community Edition!</sys:String>
-    <sys:String x:Key="Setup.About.Community.Name">PCL Community</sys:String>
-    <sys:String x:Key="Setup.About.Contributors.Title">Contributors</sys:String>
-    <sys:String x:Key="Setup.About.Contributors.ViewMore">View more</sys:String>
     <sys:String x:Key="Setup.About.Error.LoadContributorsFailed">Failed to load contributor information</sys:String>
     <sys:String x:Key="Setup.About.GitHubHome">GitHub page</sys:String>
     <sys:String x:Key="Setup.About.Licenses.Title">Licences and copyrights</sys:String>
@@ -2410,8 +2406,6 @@
     <sys:String x:Key="Setup.About.Licenses.ViewWebsite">Source website</sys:String>
     <sys:String x:Key="Setup.About.OriginalAuthor.Info">The original author of Plain Craft Launcher!</sys:String>
     <sys:String x:Key="Setup.About.OriginalAuthor.Name">LTCat (龙腾猫跃)</sys:String>
-    <sys:String x:Key="Setup.About.SourceCode">Source code</sys:String>
-    <sys:String x:Key="Setup.About.SponsorOriginalAuthor">Sponsor original author</sys:String>
     <sys:String x:Key="Setup.About.Title">About</sys:String>
     <sys:String x:Key="Setup.About.UpstreamLegal.CopyrightText">Copyright © 龙腾猫跃 2016. All Rights Reserved.&#xD;Computer Software Copyright Registration No.: 2020SR0875133&#xD;Report violations to: hexdragon@vip.qq.com&#xD;NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.</sys:String>
     <sys:String x:Key="Setup.About.UpstreamLegal.OpenSource">Source code</sys:String>
@@ -2460,57 +2454,20 @@
 
     <!-- Setup.About.SpecialThanks -->
 
-    <sys:String x:Key="Setup.About.SpecialThanks.GoBlog">Blog</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Bmclapi">Provided BMCLAPI mirror and Forge installation tool. Details at https://bmclapi.bangbang93.com</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Cloud">Provided cloud services for PCL CE.</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.IconDesign">Designed and created the PCL CE icon.</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcim">Provided MCIM community resource mirrors and image hosting services for the help centre!</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcmod">Provided Chinese translation of mods and more related information!</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Bangbang93">bangbang93</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Emperormummy">Emperormummy</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Mcmod">MCMod (MC 百科)</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Pysio">Pysio @ Akaere Network</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Yunmoan">云默安 @ 至远光辉</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Name.Z0z0r4">z0z0r4</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.OpenMcmod">Website</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.OpenWebsite">Website</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.SponsorMirror">Sponsor mirror</sys:String>
-    <sys:String x:Key="Setup.About.SpecialThanks.Title">Special thanks</sys:String>
 
     <!-- Setup.Feedback -->
 
-    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Submit.Action">Send feedback</sys:String>
-    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Submit.Message">{0}&#xA;&#xA;Would you like to send feedback? Without a report, this problem may not be resolved.</sys:String>
-    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Update.Message">{0}&#xA;&#xA;Updating PCL CE to the latest version may resolve this problem.</sys:String>
+    <sys:String x:Key="Setup.Feedback.ErrorPrompt.Update.Message">{0}&#xA;&#xA;To help diagnose this, export the log and contact the developer: Settings → Log → Export All Logs</sys:String>
     <sys:String x:Key="Setup.Feedback.Item.Submitter">Submitter: {0} ({1})</sys:String>
     <sys:String x:Key="Setup.Feedback.Item.Type">Type: {0}</sys:String>
     <sys:String x:Key="Setup.Feedback.Item.ViewDetail">Details</sys:String>
     <sys:String x:Key="Setup.Feedback.LoadFailed">Unable to get content</sys:String>
     <sys:String x:Key="Setup.Feedback.Loading">Loading feedback list...</sys:String>
-    <sys:String x:Key="Setup.Feedback.Reminder.Message">To report a bug, click Open folder and upload the log file containing the error from Launch-{0}-[number].log.&#xA;&#xA;Game crashes are usually unrelated to the launcher. Please do not submit launcher feedback only because the game crashed.</sys:String>
-    <sys:String x:Key="Setup.Feedback.Reminder.NotNeeded">Not needed</sys:String>
-    <sys:String x:Key="Setup.Feedback.Reminder.Title">Feedback reminder</sys:String>
-    <sys:String x:Key="Setup.Feedback.Submit.Description">Please check the feedback list for similar issues before submitting new feedback to avoid duplicate submissions.&#xA;Note: This page does not show all feedback. To view more, please go to GitHub.</sys:String>
     <sys:String x:Key="Setup.Feedback.Submit.Open">New feedback</sys:String>
-    <sys:String x:Key="Setup.Feedback.Submit.Title">Submit feedback</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.CheckFailed.Action">Check again</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.CheckFailed.Message">Update checking failed, so feedback cannot be sent.&#xA;Connect to the internet, check for updates, confirm that the problem still occurs on the latest version, then send feedback.</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.NotLatest.Action">Update</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.NotLatest.Message">You are not using the latest version of PCL CE, so feedback cannot be sent.&#xA;Update PCL CE, confirm that the problem still occurs on the latest version, then send feedback.</sys:String>
-    <sys:String x:Key="Setup.Feedback.Unavailable.Title">Cannot send feedback</sys:String>
     <sys:String x:Key="Setup.Feedback.Uncategorized">Uncategorised</sys:String>
 
     <!-- Setup.Feedback.Status -->
 
-    <sys:String x:Key="Setup.Feedback.Status.Completed">Completed</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Declined">Declined</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Duplicate">Duplicate</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Ignored">Ignored</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Paused">Paused</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Processing">Processing</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.UpNext">Up next</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.Waiting">Waiting</sys:String>
-    <sys:String x:Key="Setup.Feedback.Status.WaitingProcess">Awaiting processing</sys:String>
 
     <!-- Setup.GameManage -->
 
@@ -2608,13 +2565,6 @@
     <sys:String x:Key="Setup.Language.FormatCulture">Regional format</sys:String>
     <sys:String x:Key="Setup.Language.FormatCulture.Auto">Follow system regional format</sys:String>
     <sys:String x:Key="Setup.Language.FormatCulture.FollowLanguage">Follow UI language</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.TitlePrefix">Let</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.TitleSuffix">Go Internationalised.</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.DescriptionLine1">With the support of the community, PCL CE is entering a new chapter in its journey towards internationalisation.</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.DescriptionLine2">You can help shape that journey by contributing on our translation platform or submitting pull requests to our GitHub repository, making PCL CE more accessible to users around the world.</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.DescriptionLine3">Thank you to everyone who contributes translations, reviews, and improvements—your support makes PCL CE better for everyone.</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.TranslateWebsite">Visit translation platform</sys:String>
-    <sys:String x:Key="Setup.Language.Banner.SubmitPullRequest">Submit pull request</sys:String>
     <sys:String x:Key="Setup.Language.Reset.Success">Language page settings initialised!</sys:String>
     <sys:String x:Key="Setup.Language.Title">Language</sys:String>
     <sys:String x:Key="Setup.Language.UiLanguage">Display language</sys:String>
@@ -2753,7 +2703,6 @@
     <!-- Setup.Left.Item -->
 
     <sys:String x:Key="Setup.Left.Item.About">About</sys:String>
-    <sys:String x:Key="Setup.Left.Item.Feedback">Feedback</sys:String>
     <sys:String x:Key="Setup.Left.Item.GameManage">Management</sys:String>
     <sys:String x:Key="Setup.Left.Item.Java">Java</sys:String>
     <sys:String x:Key="Setup.Left.Item.Launch">Launch</sys:String>
@@ -2949,7 +2898,6 @@
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.Export">Export</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.FeatureHide">Feature hiding</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.FeatureHide.ToolTip">Only this tab will be hidden. Disabled content settings are still valid.&#xA;This can avoid feature hiding being changed whilst keeping the Personalisation page.</sys:String>
-    <sys:String x:Key="Setup.Ui.FeatureHide.Item.Feedback">Feedback</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.GameManage">Management</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.InstanceSelect">Selection</sys:String>
     <sys:String x:Key="Setup.Ui.FeatureHide.Item.InstanceSelect.ToolTip">Hide the selection and properties buttons below the Launch button.</sys:String>
@@ -3132,7 +3080,7 @@
 
     <sys:String x:Key="SystemDialog.Browser.OpenFailed.Message">PCL CE could not open this link. The link was copied to the clipboard and can be opened manually.&#xA;&#xA;Link: {0}</sys:String>
     <sys:String x:Key="SystemDialog.Browser.OpenFailed.Title">Failed to open link</sys:String>
-    <sys:String x:Key="SystemDialog.Fatal.Message.WithFeedbackGuidance">{0}&#xA;&#xA;If you think this is a launcher issue, please submit feedback so it can be investigated.&#xA;Export logs: Settings → View logs → Export all logs</sys:String>
+    <sys:String x:Key="SystemDialog.Fatal.Message.WithFeedbackGuidance">{0}&#xA;&#xA;If you believe this is a launcher issue, please export the log and contact the developer.&#xA;Export: Settings → Log → Export All Logs</sys:String>
     <sys:String x:Key="SystemDialog.Fatal.Title">Fatal error</sys:String>
     <sys:String x:Key="SystemDialog.File.AllFilesFilter">All files|*.*</sys:String>
     <sys:String x:Key="SystemDialog.File.OpenFailed.Message">Failed to open the file or programme.&#xA;&#xA;Path: {0}</sys:String>
@@ -3177,6 +3125,9 @@ Next: auto-sync mods and configs (in development).</sys:String>
     <sys:String x:Key="Tools.Studio.Account.NicknameHint">Nickname (up to 7 characters, shown to friends only)</sys:String>
     <sys:String x:Key="Tools.Studio.Account.PasswordTip">At least 8 characters. The server stores a salted hash only, never the plain password.</sys:String>
     <sys:String x:Key="Tools.Studio.Account.DevicePrivacyTip">Sign-up reports a device identifier so one device can't register repeatedly. The server stores only its irreversible hash.</sys:String>
+    <sys:String x:Key="Tools.Studio.Account.PrivacyNotice">By signing in or registering you confirm you have read and accept the Privacy Policy. In short: passwords are stored only as salted scrypt hashes; the device identifier sent at sign-up is kept solely as an irreversible hash and is used only to curb mass registration - signing in is never device-restricted; no third-party analytics or crash reporting is wired in (telemetry is fully disabled). Note: other players in the same room can see your email account, so avoid using your primary personal address.</sys:String>
+    <sys:String x:Key="Tools.Studio.Account.PrivacyLink">Read the full Privacy Policy (also available offline)</sys:String>
+    <sys:String x:Key="Tools.Studio.Account.PrivacyTitle">Privacy Policy</sys:String>
     <sys:String x:Key="Tools.Studio.Account.Login">Sign in</sys:String>
     <sys:String x:Key="Tools.Studio.Account.Register">Sign up</sys:String>
     <sys:String x:Key="Tools.Studio.Account.GoRegister">No account yet? Sign up</sys:String>

@@ -475,6 +475,40 @@ public partial class PageToolsStudio
         Show(PanAccountLogin, true);
     }
 
+    /// <summary>隐私政策全文随包分发在 app\docs\ 下，可离线阅读；
+    /// 只有取不到本地副本时才退回在线地址——部分玩家访问不了 GitHub。</summary>
+    private void BtnPrivacy_Click(object sender, System.EventArgs e)
+    {
+        var name = PrivacyFileName();
+        foreach (var baseDir in new[] { AppDomain.CurrentDomain.BaseDirectory, Directory.GetCurrentDirectory() })
+        {
+            var path = Path.Combine(baseDir, "docs", name);
+            if (!File.Exists(path)) continue;
+            string text;
+            try
+            {
+                text = File.ReadAllText(path);
+            }
+            catch
+            {
+                break;
+            }
+            ModBase.RunInNewThread(() => ModMain.MyMsgBoxMarkdown(text,
+                Lang.Text("Tools.Studio.Account.PrivacyTitle")), "PrivacyPolicy");
+            return;
+        }
+        ModBase.OpenWebsite("https://github.com/Fangshang95/PCL-online/blob/main/docs/" + name);
+    }
+
+    private static string PrivacyFileName()
+    {
+        var lang = LocalizationService.CurrentLanguage.ToString();
+        if (lang.Contains("TW", StringComparison.OrdinalIgnoreCase) ||
+            lang.Contains("Hant", StringComparison.OrdinalIgnoreCase))
+            return "PRIVACY-ZH_TW.md";
+        return lang.StartsWith("Zh", StringComparison.OrdinalIgnoreCase) ? "PRIVACY.md" : "PRIVACY-EN.md";
+    }
+
     private async void BtnRegister_Click(object sender, MouseButtonEventArgs e)
     {
         var email = TxtRegEmail.Text.Trim();
